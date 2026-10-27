@@ -1,0 +1,11 @@
+# Which rcdaq packet reads which slot of mapping.txt on this bench, one row per slot read.
+# One packet may read several slots if their channels do not overlap.
+#
+#   packet  slot
+#
+# packet  2000 + 10*link + node (setup_rcdaq.sh; the single V1742 here is 2000)
+# Leave empty until checked: the analysis then labels channels by packet and number.
+
+# The Photek has eight 32-channel readout blocks (octants, slots 0-7); the single V1742 reads one
+# octant at a time (as in the MCP_Scan octant scans), e.g. octant 3:
+#   2000  3

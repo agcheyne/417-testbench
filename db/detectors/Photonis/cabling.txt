@@ -1,0 +1,14 @@
+# Which rcdaq packet reads which slot of mapping.txt on this bench, one row per slot read.
+# One packet may read several slots if their channels do not overlap.
+#
+#   packet  slot
+#
+# packet  2000 + 10*link + node (setup_rcdaq.sh; the single V1742 here is 2000)
+# Leave empty until checked: the analysis then labels channels by packet and number.
+
+# The Photonis has two 32-channel readouts (slots 0 and 1); the single V1742 reads one of them,
+# e.g. readout 0:
+#   2000  0
+
+# 27 Oct 2026: the V1742 reads readout 0 (laser at 65, 82 mm sits on ch20 = pixel 2,5 of readout 0)
+2000  0

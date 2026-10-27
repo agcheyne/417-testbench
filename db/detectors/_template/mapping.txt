@@ -1,0 +1,12 @@
+# Readout map of this detector: digitiser slot + channel -> anode pixel, one row per pixel.
+# This is the detector's own map (it does not change with the bench); which rcdaq
+# packet reads which slot here is in cabling.txt.
+#
+#   slot  channel  row  col
+#
+# slot     the detector's readout connector / digitiser position (0, 1, ...)
+# channel  0-31 within that slot
+# row/col  pixel on the anode (row 0 / col 0 = the corner used for STAGE_X0_MM / STAGE_Y0_MM)
+#
+# Pixels not listed are treated as not connected. Leave the table empty until the
+# cabling is checked: the analysis then just labels channels by number.

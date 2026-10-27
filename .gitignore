@@ -1,0 +1,21 @@
+# run-time output and selection, not code
+logs/
+state/
+
+# ROOT / pmonitor build products (make regenerates them)
+*.so
+*.o
+*.d
+*.pcm
+*_dict.C
+*_dict.h
+
+# logs written by the CAEN libraries
+FERSlib_Log.txt
+MsgLog.txt
+
+# measurement results and plots (unpublished detector data): kept on disk, not in the repository
+*.root
+*.png
+*.pdf
+*.evt
