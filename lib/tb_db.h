@@ -16,6 +16,7 @@
 #include <fstream>
 #include <map>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -57,6 +58,17 @@ inline std::string detector_in_910(const std::string &text)
   std::smatch s;
   static const std::regex re("detector ([A-Za-z0-9_.-]+), DAQ profile");
   return std::regex_search(text, s, re) ? std::string(s[1]) : std::string();
+}
+
+// V1742 inputs to leave out (pickup or dead): list "1 4 6"; "-" = MASKED_CHANNELS in db/testbench.conf
+inline std::set<int> masked_channels(const std::string &list = "-")
+{
+  std::string l = list == "-" ? read_conf(repo_root() + "/db/testbench.conf")["MASKED_CHANNELS"] : list;
+  if (l.size() >= 2 && l.front() == '"') l = l.substr(1, l.size() - 2);
+  std::set<int> m;
+  std::istringstream is(l);
+  for (int ch; is >> ch;) m.insert(ch);
+  return m;
 }
 
 struct Db {

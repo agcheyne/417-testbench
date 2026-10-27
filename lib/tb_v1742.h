@@ -24,6 +24,7 @@
 #include <Event/caen_correction.h>
 
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <dirent.h>
 #include <fstream>
@@ -124,6 +125,69 @@ struct V1742Event {
     if (calib_file.empty()) { printf("tb_v1742: no %s calibration in %s - raw data\n", speed[f], dir.c_str()) ; return ; }
     cc.reset(new caen_correction(calib_file.c_str()));
     printf("tb_v1742: calibration %s\n", calib_file.c_str());
+  }
+};
+
+// --- CFD time offsets of the inputs -------------------------------------------------------------
+// db/v1742/time_offsets_<serial>_<5G|2G|1G>.conf, written by analysis/time_offsets from a scan that
+// put the laser on every pixel: OFFSET_00 .. OFFSET_31 [ns] = each input's laser peak (CFD time -
+// group trigger) minus the mean of the measured inputs of groups 2 and 3. Subtract it from a CFD
+// time to put every input on one time axis: the two DRS4 boards (groups 0/1, 2/3) differ by ~2.3 ns
+// (the cabling of their TR inputs), inputs within a board by tens to hundreds of ps. Inputs not
+// measured ("-") get the mean of the measured inputs on their board; a board with none, 0
+// (group_known false).
+//   tb::TimeOffsets off ; off.load(ev.serial, ev.freq) ; t = h.t_cfd - off.ns[ch];
+struct TimeOffsets {
+  bool ok = false;
+  std::string file;
+  double ns[NSIG] = {};
+  bool measured[NSIG] = {};
+  bool group_known[NTRIG] = {};            // its board has measured inputs
+
+  bool load(int serial, int freq_code)
+  {
+    static const char *speed[] = {"5G", "2G", "1G"};
+    ok = false;
+    file.clear();
+    for (int ch = 0; ch < NSIG; ch++) { ns[ch] = 0 ; measured[ch] = false ; }
+    for (bool &k : group_known) k = false;
+    if (freq_code < 0 || freq_code > 2) return false;
+    std::string dir = repo_root() + "/db/v1742";
+    if (serial >= 0) {
+      char b[64];
+      snprintf(b, sizeof b, "/time_offsets_%04d_%s.conf", serial, speed[freq_code]);
+      if (std::ifstream(dir + b)) file = dir + b;
+    }
+    if (file.empty())   // serial unknown (no begin-run event seen): any file for this speed
+      if (DIR *d = opendir(dir.c_str())) {
+        std::string suffix = std::string("_") + speed[freq_code] + ".conf";
+        while (dirent *de = readdir(d)) {
+          std::string n = de->d_name;
+          if (n.rfind("time_offsets_", 0) == 0 && n.size() > suffix.size() &&
+              n.compare(n.size() - suffix.size(), suffix.size(), suffix) == 0) { file = dir + "/" + n ; break ; }
+        }
+        closedir(d);
+      }
+    if (file.empty()) return false;
+    auto m = read_conf(file);
+    double sum[NTRIG / 2] = {};             // per DRS4 board: groups 0/1, 2/3
+    int n[NTRIG / 2] = {};
+    for (int ch = 0; ch < NSIG; ch++) {
+      char key[16];
+      snprintf(key, sizeof key, "OFFSET_%02d", ch);
+      auto it = m.find(key);
+      if (it == m.end() || it->second.empty() || it->second == "-") continue;
+      ns[ch] = atof(it->second.c_str());
+      measured[ch] = true;
+      sum[ch / 16] += ns[ch] ; n[ch / 16]++;
+    }
+    for (int ch = 0; ch < NSIG; ch++) {
+      int b = ch / 16;
+      group_known[ch / 8] = n[b] > 0;
+      if (!measured[ch]) ns[ch] = n[b] ? sum[b] / n[b] : 0;
+    }
+    ok = true;
+    return true;
   }
 };
 

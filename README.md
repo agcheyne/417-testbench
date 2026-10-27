@@ -30,6 +30,9 @@ See `Lab_instruments_Cheat_Sheet.md` for day-to-day use of every instrument.
   - `mapping.txt`: digitiser slot + channel to anode pixel (the detector's own map).
   - `cabling.txt`: which rcdaq packet reads which slot on this bench.
 - `daq/<profile>.conf`: readout settings: V1742 sampling rate, record length, trigger; or the scope.
+- `v1742/time_offsets_<serial>_<5G|2G|1G>.conf`: CFD time offset of every V1742 input (the two
+  DRS4 boards differ by ~2.3 ns, from their TR cabling; unmeasured inputs take their board's mean), measured with `analysis/time_offsets` from a scan that lights every
+  pixel; the online monitor and the analyses take it off every time. Measure again after re-cabling.
 
 ```bash
 bin/testbench.sh list
@@ -67,6 +70,8 @@ pmonitor projects in `analysis/`, one folder per study, all on the shared event 
 - `gain_hv`: gain vs HV from single-photoelectron fits, working point
 - `timing_xtalk`: timing resolution, time walk, crosstalk matrix
 - `scan_map`: response maps from an XY scan, and a check of the detector's mapping and position
+- `clusters`: cluster sizes, charge sharing between pixels, and where to put the cluster thresholds, and the single-photoelectron charge of the summed spot pixels
+- `time_offsets`: the time offset of every V1742 input from an XY scan, written to `db/v1742/`
 
 ```bash
 cd analysis/general && make && ./general.sh /scratch2/data/hpDIRC/HRPPD/HRPPD-00000123-0000.evt

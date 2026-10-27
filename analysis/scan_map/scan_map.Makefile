@@ -23,7 +23,7 @@ ADDITIONAL_LIBS =
 
 SO = lib$(PACKAGE).so
 
-$(SO) : $(PACKAGE).cc $(PACKAGE)_dict.C $(ADDITIONAL_SOURCES) $(LINKFILE)
+$(SO) : $(PACKAGE).cc $(PACKAGE)_dict.C $(ADDITIONAL_SOURCES) $(LINKFILE) $(wildcard $(TB_ROOT_DIR)/lib/*.h)
 	$(CXX) $(CXXFLAGS) -o $@ -shared  $<  $(ADDITIONAL_SOURCES) $(PACKAGE)_dict.C $(LDFLAGS)  $(ADDITIONAL_LIBS)
 
 

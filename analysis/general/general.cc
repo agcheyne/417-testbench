@@ -228,9 +228,10 @@ void fit_gain(int ch)
                                  "      event, which biases the pedestal - set a fixed window for a real gain fit\n");
   tb::SpeFit f = tb::fit_spe(h_q[ch]);
   if (!f.f) { printf("ch %d: too few entries\n", ch) ; return ; }
-  printf("ch %d SPE fit %s: Q1 = %.4f +- %.4f pC, gain = %.3g +- %.2g, mu = %.3f +- %.3f p.e., "
-         "pedestal %.4f +- %.4f pC (sigma %.4f), chi2/ndf %.2f\n", ch, f.ok ? "ok" : "DID NOT CONVERGE",
-         f.q1, f.eq1, f.gain, f.egain, f.mu, f.emu, f.q0, f.eq0, f.s0, f.chi2ndf);
+  printf("ch %d SPE fit %s (%s): Q1 = %.4f +- %.4f pC, gain = %.3g +- %.2g, under-amplified %.0f %% (mean %.4f pC per p.e.), "
+         "mu = %.3f +- %.3f p.e., pedestal %.4f +- %.4f pC (sigma %.4f), chi2/ndf %.2f\n", ch, f.ok ? "ok" : "DID NOT CONVERGE",
+         f.model == tb::SPE_GAUSS ? "Gauss" : f.model == tb::SPE_POLYA ? "Polya" : "Polya + under-amplified",
+         f.q1, f.eq1, f.gain, f.egain, 100 * f.w, f.mean_q, f.mu, f.emu, f.q0, f.eq0, f.s0, f.chi2ndf);
   if (!f.resolved)
     printf("  WARNING: Q1 is less than 3 pedestal sigmas: no real photoelectron peak (no light, or noise)\n");
   if (f.mu > 3)
