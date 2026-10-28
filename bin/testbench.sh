@@ -90,13 +90,16 @@ cmd_check() {
     problems() { local l ; while IFS= read -r l ; do echo "$l" ; bad=1 ; done ; }   # lines from awk checks
     shopt -s lastpipe   # so "... | problems" runs here and can set bad
     tb_site
-    for n in DATA_ROOT CALIB_DIR ANC_PACKETS X_MIN X_MAX Y_MIN Y_MAX REST_X REST_Y MOVE_TOL MOVE_TIMEOUT ; do
+    for n in DATA_ROOT CALIB_DIR ANC_PACKETS X_MIN X_MAX Y_MIN Y_MAX REST_X REST_Y MOVE_TOL MOVE_TIMEOUT \
+             MONO_GPIB_BOARD MONO_GPIB_ADDR MONO_STEPS_PER_NM MONO_MIN MONO_MAX MONO_BACKLASH MONO_MOVE_TIMEOUT ; do
         [ -n "${!n}" ] || err "testbench.conf: $n is empty"
     done
     [ "$HV_UNITS" == "$(sed -n 's/^UNITS=(\([^)]*\)).*/\1/p' "$N1470")" ] ||
         err "testbench.conf: HV_UNITS=\"$HV_UNITS\" differs from UNITS in bin/n1470.sh"
     tb_fcmp $X_MIN '>=' 0 && tb_fcmp $X_MAX '<=' 150 && tb_fcmp $Y_MIN '>=' 0 && tb_fcmp $Y_MAX '<=' 150 ||
         err "testbench.conf: stage limits must lie inside 0-150 mm (thor_epics ignores anything else)"
+    tb_fcmp $MONO_MIN '>=' 100 && tb_fcmp $MONO_MIN '<' $MONO_MAX && tb_fcmp $MONO_MAX '<=' 870 ||
+        err "testbench.conf: monochromator limits must lie inside 100-870 nm (zero order below, LabVIEW's soft limit above)"
     for n in $(tb_detector_names) ; do
         echo "detector $n"
         f=$(tb_detector_dir $n)

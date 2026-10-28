@@ -15,7 +15,7 @@ The instrument scripts live in `bin/` of this repository; run them from the repo
 | Newport 1830-R power meter | `newport_powermeter.sh` | Native USB `104d:cec7` | USB (libusb) | No |
 | Thorlabs APT stepper (X/Y motors) | `motor.sh` (EPICS `THOR_X` / `THOR_Y`) | FTDI `0403:faf0` | via EPICS IOC + `thor_epics` | Yes, packets 930/931/932 |
 | Tektronix MSO64B oscilloscope | none yet (by hand) | LAN 192.168.0.125 | socket server port 4000 | No |
-| JY H20 UV monochromator | not yet | NI GPIB-USB-HS `3923:709b`, GPIB address 1 (or spare RS-232) | GPIB (linux-gpib not installed yet) | No |
+| JY H20 UV monochromator | `monochromator.sh` | NI GPIB-USB-HS `3923:709b` → `/dev/gpib0`, GPIB address 1 | GPIB, linux-gpib 4.3.7 | No |
 
 
 
@@ -308,15 +308,29 @@ Example: `131` = 128 + 2 + 1 = fresh reading plus two old errors. For QE work, w
 
 ## Monochromator and lamp (QE light source)
 
-Not controllable from this machine yet: the monochromator still runs from LabVIEW on the Windows laptop, through the NI GPIB-USB-HS (`3923:709b`), at GPIB address 1 (`GPIB0::1::INSTR` in LabVIEW). Two ways here: move the GPIB-USB-HS to this machine (needs linux-gpib 4.3.7; its kernel modules build cleanly against this kernel, install needs root; `/etc/gpib.conf` `board_type = "ni_usb_b"`, then the instrument is `pad = 1`), or connect the controller's spare RS-232 port through a USB-serial adapter on the keyboard/mouse hub.
+Reachable from this machine since 28 Oct 2026: the NI GPIB-USB-HS (`3923:709b`, moved here from the Windows laptop) is `/dev/gpib0` through linux-gpib 4.3.7 (built from source in `~/linux-gpib-4.3.7`, installed in `/usr/local`; rebuild the kernel part after a kernel update). The controller is at GPIB address 1 (`GPIB0::1::INSTR` in the laptop's LabVIEW). `/etc/gpib.conf` has no device entry, so open it with `ibdev(0, 1, 0, …)` and set EOS = CR with REOS yourself.
+
+| Command | What it does | Seen 28 Oct |
+| --- | --- | --- |
+| `bin/monochromator.sh status` | Controller state, busy, wavelength and steps | `main program (f)`, `not busy`, `600.00 nm (12000 steps)` |
+| `bin/monochromator.sh pos` | Wavelength [nm] | `600.00` |
+| `bin/monochromator.sh start` | After power-on: start the controller's main program (`O2000`). Moves nothing | `already running` |
+| `bin/monochromator.sh set NM` | Tell the controller where the grating is (read off the monochromator's counter). Moves nothing | – |
+| `bin/monochromator.sh move NM` | Move and wait; downward moves overshoot by `MONO_BACKLASH` and come back up. Ctrl-C stops | `move 550` from 600: 3.7 s, the monochromator's counter showed 550; `move 600`: 3.0 s |
+| `bin/monochromator.sh stop` | Stop the motor, also from another terminal | – |
+| `bin/monochromator.sh raw CMD…` | ISA commands as they are, one reply per line (`\r` = CR, `\x00` = NUL); no limits checked | `raw ' ' E 'H0\r' K` → `f`, `oz`, `o12000`, `o0` |
+
+Limits (`MONO_MIN`/`MONO_MAX`, 200–870 nm), steps per nm, backlash overshoot and move timeout are in `db/testbench.conf`. Moves are refused while the position reads 0 (not set since power-on). Every `start`, `set` and `move` goes to `logs/testbench.log`.
+
+After switching the controller on: `monochromator.sh start`, read the wavelength off the monochromator, `monochromator.sh set NM`.
 
 - **Lamp:** Hamamatsu L7893, deuterium + tungsten-halogen, 200–1100 nm, into the monochromator by SMA fibre. Front-panel switches only. Warm up at least 30 min (stability is specified from then: 0.3 %/h drift). Don't switch it off for darks.
 - **Monochromator:** Jobin Yvon H20 UV (200 mm), with an ISA/JY controller speaking the "ISA Command Set". The laptop's `H20 Control.vi` (Glasgow, 2005) scans through ISA's LabVIEW driver (`Isa_user.llb`, `Isa_comm.llb`; manual: `from_GLADD/monochromator/equipment/LabView_Manual.pdf`) and stops at a software limit of 870 nm. From the driver's labels and comments:
-  - **Startup:** send a space (ASCII 32) to ask the controller's state: `F` = main program running (ready), `B` = boot program, `*` = autobauded (RS-232). In `B` or `*` (on GPIB also `=`), send `O2000` followed by a NUL byte to start the main program and read until `*` comes back; a space should then answer `F`. Then `A` initialises the motor.
+  - **Startup:** send a space (ASCII 32) to ask the controller's state: `F` = main program running (ready), `B` = boot program, `*` = autobauded (RS-232). In `B` or `*` (on GPIB also `=`), send `O2000` followed by a NUL byte to start the main program and read until `*` comes back; a space should then answer `F`. Then `A` initialises the motor. Seen 28 Oct: space → `B`; `O2000`+NUL → `*`; space → `f` (lower case: probably main program before `A`, not yet confirmed).
   - **Replies:** a confirmation character first (`o` expected; anything else is "Bad Confirmation"), then any data up to a CR.
-  - **Motor commands** (motor 0 = grating): `H0`+CR read position (steps), `F0,<steps>`+CR move relative, `G0,<steps>`+CR set the current position without moving, `E` busy check (`q` = busy, `z` = not busy), `K` limit status, `L` stop. Commands that take parameters end with CR; `A` and `E` are sent bare. These framings come from the driver, not from a trace, so check them with harmless commands (space, `E`, `H0`) first.
+  - **Motor commands** (motor 0 = grating): `H0`+CR read position (steps), `F0,<steps>`+CR move relative, `G0,<steps>`+CR set the current position without moving, `E` busy check (`q` = busy, `z` = not busy), `K` limit status (`o0` = no limit switch hit), `L` stop. Commands that take parameters end with CR; `A` and `E` are sent bare. Over GPIB each reply ends with EOI. Seen 28 Oct: `E` → `oz`, `H0`+CR → `o0`+CR; `G0,6980`+CR → `o` (grating found at 349 nm); `F0,5020`+CR → `o`, `E` → `oq` while moving, `oz` after a few seconds, then `H0` → `o12000`+CR (600 nm). `F` worked without `A` first.
   - **Shutter:** `W`/`X` open/close, one parameter (shutter number).
-  - **Reference:** left at 600 nm on 26 Oct 2026, so the first `H0` read should return about 12000.
+  - **Position after power-on:** the controller forgets it (it came up in boot mode and `H0` read 0 on 28 Oct). Read the wavelength off the monochromator itself, then tell the controller with `G0,<20 × nm>` before any move. Don't trust the last value LabVIEW showed: on 28 Oct it said 600 nm but the drive was at 349 nm.
 - **Darks:** cap the SMA fibre at the monochromator input, or park the monochromator at about 180 nm, if its drive goes that low; check with the power meter that it really reads dark there. Never near 0 nm: that's zero order, white light.
 - **Second order:** above about 400 nm the grating also passes λ/2 UV light; use an order-sorting long-pass filter there, or the QE comes out too high.
 - **Steps:** 20 motor steps per nm, position = 20 × wavelength (600 nm = 12000 steps).
