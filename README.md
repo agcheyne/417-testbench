@@ -62,6 +62,9 @@ analysis knows what the data is without a run sheet.
 - `bin/scan_hv.sh` steps one CAEN channel through a list of voltages (it must already be on) and
   takes one run per point. Acquisition only: fit and plot the gain afterwards with
   `analysis/gain_hv/fit_hv_scan.sh logs/scans/<scan>` (`--spot` sums a group of pixels).
+- `bin/lamp_scan.sh FROM TO STEP` measures the lamp through the monochromator on the power meter,
+  with a dark at every wavelength (grating parked, nothing touched); plot it with
+  `analysis/lamp_scan/plot_lamp_scan.sh`.
 - Every scan gets its own folder, `logs/scans/<date>_<time>_<name>/`: the scan's CSV and `.txt`, and
   whatever analysis output belongs to it. Plots and files from single-run studies go in
   `logs/runs/run<N>/`. The HV logs and `testbench.log` stay at the top of `logs/`.
@@ -78,6 +81,7 @@ pmonitor projects in `analysis/`, one folder per study, all on the shared event 
 - `scan_map`: response maps from an XY scan, and a check of the detector's mapping and position
 - `clusters`: cluster sizes, charge sharing between pixels, and where to put the cluster thresholds, and the single-photoelectron charge of the summed spot pixels
 - `time_offsets`: the time offset of every V1742 input from an XY scan, written to `db/v1742/`
+- `lamp_scan`: not a pmonitor project; a ROOT macro that plots a `bin/lamp_scan.sh` scan
 
 ```bash
 cd analysis/general && make && ./general.sh /scratch2/data/hpDIRC/HRPPD/HRPPD-00000123-0000.evt

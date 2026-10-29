@@ -9,7 +9,7 @@
 #   'PM:Lambda 405' PM:Lambda? set / read the wavelength correction [nm], 200-1100 with this head
 #   PM:AUTO? PM:RANGE?         autorange on/off, present range
 #   PM:ATT?                    attenuator (OD3 cap) in use: set PM:ATT 1 when it is fitted
-#   PM:DIGITALFILTER? PM:ZERO? filter mode, zero (offset) subtraction
+#   PM:DIGITALFILTER? PM:ZERO? filter (1 slow .. 3 fast), zero: 'PM:ZERO 1' with the detector dark
 #   '*IDN?' ERRSTR? 'Q?'       identity, oldest error, status byte
 # The display only refreshes every ~0.3-2 s: space repeated readings at least 0.5 s apart.
 

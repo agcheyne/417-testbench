@@ -12,17 +12,22 @@
 #                                      monochromator's own counter); nothing moves
 #   monochromator.sh move NM           move there and wait. Downward moves overshoot by MONO_BACKLASH
 #                                      and come back up. Ctrl-C stops the motor
+#   monochromator.sh dark              park at MONO_DARK (below MONO_MIN), where no light gets through:
+#                                      a dark without capping the detector. move NM comes back up
 #   monochromator.sh stop              stop the motor (also from another terminal)
+#   monochromator.sh speed             motor speed: start and top speed [steps/s], ramp [ms]
+#   monochromator.sh speed MIN MAX MS  set it until the next move or dark, which put MONO_SPEED back
 #   monochromator.sh raw CMD [CMD ..]  send ISA commands as they are and print each reply; \r = CR,
 #                                      \x00 = NUL, e.g. raw ' ' E 'H0\r'. No limits are checked
 #
-# Limits, overshoot and timeout: MONO_MIN / MONO_MAX / MONO_BACKLASH / MONO_MOVE_TIMEOUT in
-# db/testbench.conf. Moves are refused while the position reads 0 (not set since power-on).
+# Limits, overshoot, dark position, speed and timeout: MONO_MIN / MONO_MAX / MONO_BACKLASH /
+# MONO_DARK / MONO_SPEED / MONO_MOVE_TIMEOUT in db/testbench.conf. Moves are refused while the
+# position reads 0 (not set since power-on).
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 tb_site
 
-usage() { sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,25p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 # send each command, print each reply on its own line without the CR; exit 1 on a GPIB error
 mono_io() {
@@ -114,6 +119,30 @@ move_rel() {   # STEPS
     wait_idle
 }
 
+read_speed() {   # -> MIN,MAX,RAMP
+    local r
+    r=$(mono_io 'C0\r') || exit 1
+    [[ $r =~ ^o([0-9]+,[0-9]+,[0-9]+)$ ]] || tb_die "unexpected reply to C0: '$r'"
+    echo ${BASH_REMATCH[1]}
+}
+
+set_speed() {   # MIN,MAX,RAMP
+    local r
+    [[ $1 =~ ^([0-9]+),([0-9]+),([0-9]+)$ ]] && (( BASH_REMATCH[1] > 0 && BASH_REMATCH[1] <= BASH_REMATCH[2] )) ||
+        tb_die "speed '$1' is not MIN,MAX,RAMP with 0 < MIN <= MAX [steps/s] and RAMP [ms]"
+    r=$(mono_io "B0,$1\\r") || exit 1
+    [ "$r" == o ] || tb_die "speed $1 refused: reply '$r'"
+    [ "$(read_speed)" == "$1" ] || tb_die "the speed did not change to $1"
+}
+
+use_speed() {   # put MONO_SPEED back if it was changed (or lost at power-off)
+    local cur
+    cur=$(read_speed) || exit 1
+    [ "$cur" == "$MONO_SPEED" ] && return 0
+    set_speed "$MONO_SPEED"
+    tb_log "speed set to $MONO_SPEED (MONO_SPEED; it was $cur)"
+}
+
 lock() {   # SECONDS to wait for another monochromator.sh
     mkdir -p "$TB_STATE"
     exec 9> "$TB_STATE/monochromator.lock"
@@ -176,6 +205,7 @@ case $1 in
         need_main
         cur=$(read_steps) || exit 1
         [ "$cur" -ne 0 ] || tb_die "the position reads 0, i.e. it was not set since power-on: monochromator.sh set NM"
+        use_speed
         tgt=$(to_steps "$2")
         trap 'mono_io L > /dev/null ; tb_die "interrupted: motor stopped at $(to_nm "$(read_steps)") nm"' INT
         if [ $tgt -lt $cur ] ; then
@@ -191,6 +221,30 @@ case $1 in
         [ "$end" == "$tgt" ] || tb_die "ended at $(to_nm $end) nm instead of $(to_nm $tgt) nm"
         tb_log "moved to $(to_nm $end) nm"
         echo "at $(to_nm $end) nm" ;;
+    dark)
+        [ $# -eq 1 ] || usage
+        lock 5
+        need_main
+        cur=$(read_steps) || exit 1
+        [ "$cur" -ne 0 ] || tb_die "the position reads 0, i.e. it was not set since power-on: monochromator.sh set NM"
+        use_speed
+        tgt=$(to_steps $MONO_DARK)
+        trap 'mono_io L > /dev/null ; tb_die "interrupted: motor stopped at $(to_nm "$(read_steps)") nm"' INT
+        move_rel $(( tgt - cur ))     # no backlash: the dark position need not be exact
+        trap - INT
+        end=$(read_steps) || exit 1
+        [ "$end" == "$tgt" ] || tb_die "ended at $(to_nm $end) nm instead of $(to_nm $tgt) nm"
+        echo "at $(to_nm $end) nm (dark)" ;;
+    speed)
+        [ $# -eq 1 ] || [ $# -eq 4 ] || usage
+        lock 5
+        need_main
+        if [ $# -eq 4 ] ; then
+            set_speed "$2,$3,$4"
+            tb_log "speed set to $2,$3,$4 by hand"
+        fi
+        IFS=, read -r lo hi ramp <<< "$(read_speed)"
+        echo "start $lo steps/s, top $hi steps/s ($(to_nm $hi) nm/s), ramp $ramp ms (MONO_SPEED $MONO_SPEED)" ;;
     stop)
         r=$(mono_io L) || exit 1
         echo "stop sent (reply '$r')" ;;
