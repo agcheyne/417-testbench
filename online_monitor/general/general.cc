@@ -1327,8 +1327,8 @@ void status()
       string more = " (one Gaussian: < 200 hits)";
       if (t.two) {
         more = t.rest_frac > 0 ? Form("; rest %.1f %% (rms %.0f ps)", 100 * t.rest_frac, 1000 * t.rest_rms) : "; rest 0 %";
-        more += std::isnan(t.sh_dt) ? "; shoulder not fitted (< 2000 hits)" : Form("; shoulder +%.0f ps (sigma %.0f ps, %.1f %%)", 1000 * t.sh_dt, 1000 * t.sh_sigma, 100 * t.sh_frac);
-        more += std::isnan(t.late_dt) ? "; late peak not fitted (< 1000 hits)" : Form("; late peak +%.0f ps (sigma %.0f ps, %.1f %%)", 1000 * t.late_dt, 1000 * t.late_sigma, 100 * t.late_frac);
+        more += std::isnan(t.sh_dt) ? "; shoulder not fitted (< 1000 hits)" : Form("; shoulder +%.0f ps (sigma %.0f ps, %.1f %%)", 1000 * t.sh_dt, 1000 * t.sh_sigma, 100 * t.sh_frac);
+        more += std::isnan(t.late_dt) ? "; no late peak (no significant excess)" : Form("; late peak +%.0f ps (sigma %.0f ps, %.1f %%)", 1000 * t.late_dt, 1000 * t.late_sigma, 100 * t.late_frac);
       }
       printf("  timing ch %d (%s): peak %.4f +- %.4f ns, sigma %.1f +- %.1f ps%s\n", watched, tamp_text().c_str(), t.mean, t.emean,
              1000 * t.sigma, 1000 * t.esigma, more.c_str());

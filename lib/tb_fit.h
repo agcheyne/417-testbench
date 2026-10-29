@@ -11,7 +11,7 @@ namespace tb {
 
 // Timing peak of an MCP-PMT: a sharp main peak, a near shoulder on its right (run 70: +100-230 ps,
 // a few %; run 252: +180 ps, ~10 %), and a separate late peak (run 70: ~+0.78 ns, 1-2 %, the same
-// at every pulse height), on a flat background (dark counts, pickup):
+// at every pulse height), on a flat background (dark counts, pickup), measured 1-2 ns before the peak:
 //   f(t) = A1 G(t; m, s1) + A2 G(t; m + d2, s2) + A3 G(t; m + d3, s3) + c
 // 1. The main peak (m, s1) is a Gaussian fitted to its left side and top only (m - 3 s .. m + 0.5 s,
 //    iterated, likelihood): everything else sits on its right, and a fit over the whole peak blends
@@ -101,7 +101,9 @@ inline TimingFit timing_fit(TH1 *h)
   f->SetParLimits(6, 0, a);
   f->SetParLimits(7, 0.45, 1.5);
   f->SetParLimits(8, wmin, 2.5 * s);
-  f->SetParLimits(9, 0, std::max(a, 1.0));
+  // the background from before the peak, fixed: left free, it rises to take in the shoulder whenever
+  // that is not fitted (< 1000 entries), and is drawn as a level far above the empty bins after the peak
+  f->FixParameter(9, side);
   const bool near = h->GetEntries() >= 1000, late = excess >= 10 && excess >= 3 * std::sqrt(expect + 1);
   if (!near) { f->FixParameter(3, 0) ; f->FixParameter(4, p0[4]) ; f->FixParameter(5, p0[5]) ; }
   if (!late) { f->FixParameter(6, 0) ; f->FixParameter(7, p0[7]) ; f->FixParameter(8, p0[8]) ; }
