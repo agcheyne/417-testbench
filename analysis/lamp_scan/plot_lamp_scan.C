@@ -1,9 +1,11 @@
 // Plot of a lamp scan (bin/lamp_scan.sh) in batch; plot_lamp_scan.sh runs it:
-//   root -b -q 'plot_lamp_scan.C("<scan>.csv", "<scan dir>/<scan>")'
+//   root -b -q 'plot_lamp_scan.C("<scan>.csv", "<scan dir>/<scan>", "<scan>_darks.csv")'
 // Writes <prefix>_spectrum.png: left, light - dark against wavelength with its standard error, and
-// the light and dark as measured, points with a flag (bin/lamp_scan.sh -h) circled; right, the dark
-// against time since the start (the meter's drift).
+// the light and dark, points with a flag (bin/lamp_scan.sh -h) circled; right, the darks taken
+// before and after the scan against wavelength (the meter's drift in between). Scans from before
+// the darks file (a dark at every point, darks = ""): right, the dark against time.
 // Prints the table in pW.
+#include <cmath>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -19,7 +21,7 @@
 #include "TMultiGraph.h"
 #include "TStyle.h"
 
-void plot_lamp_scan(const char *csv, const char *prefix)
+void plot_lamp_scan(const char *csv, const char *prefix, const char *darks = "")
 {
   struct Point { double t, nm, light, dark, net, err; std::string flags; };
   std::vector<Point> pts;
@@ -36,6 +38,24 @@ void plot_lamp_scan(const char *csv, const char *prefix)
                    std::stod(f[6]) * 1e12, std::stod(f[7]) * 1e12, f[10]});
   }
   if (pts.empty()) { printf("plot_lamp_scan: no points in %s\n", csv); return; }
+
+  // darks before ("start") and after ("end") the scan: time,nm,when,dark_W,dark_sd_W,n,range,flags
+  auto *dk_start = new TGraphErrors(), *dk_end = new TGraphErrors();
+  std::ifstream din(darks);
+  if (din) {
+    std::getline(din, line);
+    while (std::getline(din, line)) {
+      std::vector<std::string> f;
+      std::stringstream ss(line);
+      for (std::string c; std::getline(ss, c, ',');) f.push_back(c);
+      if (f.size() < 8) continue;
+      auto *g = f[2] == "start" ? dk_start : dk_end;
+      int i = g->GetN();
+      g->SetPoint(i, std::stod(f[1]), std::stod(f[3]) * 1e12);
+      g->SetPointError(i, 0, std::stod(f[4]) * 1e12 / std::sqrt(std::stod(f[5])));
+    }
+  }
+  const bool two_darks = dk_start->GetN() > 0;
 
   printf("%8s %10s %10s %10s %8s  %s\n", "nm", "light pW", "dark pW", "net pW", "+- pW", "flags");
   for (auto &p : pts)
@@ -76,13 +96,27 @@ void plot_lamp_scan(const char *csv, const char *prefix)
   auto *leg = new TLegend(0.55, 0.72, 0.89, 0.89);
   leg->AddEntry(net, "light - dark (#pm std. error)", "PL");
   leg->AddEntry(light, "light, as read", "L");
-  leg->AddEntry(dark, "dark (grating parked), as read", "L");
+  leg->AddEntry(dark, two_darks ? "dark, interpolated in time" : "dark (grating parked), as read", "L");
   if (flagged->GetN()) leg->AddEntry(flagged, "flagged: spike / retaken / noisy", "P");
   leg->Draw();
 
   c->cd(2)->SetGrid();
-  drift->SetTitle(";minutes since the first point;dark [pW] (meter at each point's wavelength)");
-  drift->Draw("APL");
+  if (two_darks) {
+    dk_start->SetLineColor(c_net); dk_start->SetMarkerColor(c_net); dk_start->SetMarkerStyle(20); dk_start->SetLineWidth(2);
+    dk_end->SetLineColor(c_dark); dk_end->SetMarkerColor(c_dark); dk_end->SetMarkerStyle(21); dk_end->SetLineWidth(2);
+    auto *mgd = new TMultiGraph();
+    mgd->Add(dk_start, "PL");
+    if (dk_end->GetN()) mgd->Add(dk_end, "PL");
+    mgd->SetTitle(";meter wavelength [nm];dark [pW] (grating parked)");
+    mgd->Draw("A");
+    auto *dleg = new TLegend(0.15, 0.78, 0.50, 0.89);
+    dleg->AddEntry(dk_start, "before the scan", "PL");
+    dleg->AddEntry(dk_end, dk_end->GetN() ? "after the scan" : "after the scan: not taken", "PL");
+    dleg->Draw();
+  } else {
+    drift->SetTitle(";minutes since the first point;dark [pW] (meter at each point's wavelength)");
+    drift->Draw("APL");
+  }
 
   c->SaveAs(Form("%s_spectrum.png", prefix));
 }

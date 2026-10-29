@@ -283,7 +283,7 @@ Arguments are sent to the meter in order; every query (ending in `?`) prints its
 | `bin/newport_powermeter.sh` (= `PM:Power?`) | Power reading in the current units: watts, because `PM:UNITS?` is `2` | `+3.6420E-08` (36.4 nW) |
 | `'PM:Lambda 405' 'PM:Lambda?'` | Set / read the wavelength correction \[nm\]. The detector measures a current; the meter divides by the detector's sensitivity at this wavelength, so a wrong setting gives a wrong power for the same light. In a monochromator scan, set it to the monochromator's wavelength at every point | Accepts 200–1100 nm with this head; outside that: `201,"VALUE OUT OF RANGE"`, old value kept |
 | `PM:AUTO?` / `PM:RANGE?` | Autorange on/off; gain range in use (0 = most sensitive, higher = more light). Each range has its own small zero offset | `1` / `0`; dark: range 0 = 0 ± 20 pW, range 1 = steady +48 pW; the 21 Oct lamp scans ran on range 3 |
-| `PM:ATT?` | OD3 attenuator cap (×1/1000) in use. Set `PM:ATT 1` whenever the cap is fitted, or readings are ~1000× too low | `0` (no attenuator) |
+| `PM:ATT?` | OD3 attenuator cap (×1/1000) in use. Set `PM:ATT 1` whenever the cap is fitted, or readings are ~1000× too low. The meter cannot tell whether the cap is on: look at the front of the detector | `0` (no attenuator). 28–29 Oct: the cap was on with `PM:ATT 0`, so the lamp's 10–50 pW became 10–50 fW and every range read exactly 0 |
 | `PM:DIGITALFILTER?` | Averaging (noise vs. how fast the reading settles): `1` = slow (most averaging), `2` = medium, `3` = fast; `0` is refused. Keep it the same between measurements you compare; with `1`, wait ~5 s after a change of light | 29 Oct, 27 pW at 400 nm, 1 s apart: filter 1 ±0.15 pW, 2 ±0.6 pW, 3 ±3 pW |
 | `PM:ZERO 1` / `PM:ZERO 0` / `PM:ZERO?` | Zero on: the reading at that moment (sign included) is stored and subtracted from then on, so readings below it now show as negative instead of 0. Take it with the detector dark: any light present is subtracted too. Off: no subtraction, negatives clipped to 0. Front-panel ZERO does the same | 29 Oct: works remotely (`PM:ZERO?` → `1`); dark then 0 ± 1 pW on range 0 |
 | `PM:UNITS 2` | Watts; the only value this meter accepts (0, 1, 3, 4 → `201,"VALUE OUT OF RANGE"`) | `2` |
@@ -304,7 +304,19 @@ Arguments are sent to the meter in order; every query (ending in `?`) prints its
 
 Example: `131` = 128 + 2 + 1 = fresh reading plus two old errors. For QE work, watch bits 2 and 3.
 
-**Dark level:** with zero off, the dark can sit below 0 and every signal smaller than that offset reads exactly `+0.0000E+00` (28–29 Oct: all ranges read 0, ranges 5–6 only showed a decaying settle after each range change). Run with zero on. The dark then drifts: on 29 Oct, lamp on and box closed, it went from −3.6 to +23 pW (at 400 nm) in an hour, as large as the monochromatic signal (10–50 pW into the sphere). So take a dark next to every reading: `bin/lamp_scan.sh` parks the grating in the dark at every point. Negligible only above ~2 nW.
+**Readings of exactly `+0.0000E+00`:** on 28–29 Oct every range read 0 because the OD3 attenuator cap was on the detector (see `PM:ATT?`): the light was 1000× below what the meter resolves. Check the front of the detector first. Separately, with zero off, negative readings are clipped to 0, so a dark that sits below 0 is lost: run with zero on.
+
+**Dark level:** the dark drifts: on 29 Oct, lamp on and box closed, it went from −3.6 to +23 pW (at 400 nm) in an hour, as large as the monochromatic signal (10–50 pW into the sphere). So take darks around every measurement: `bin/lamp_scan.sh` reads the dark before and after the scan and interpolates it in time. The dark in W also depends on the meter's wavelength setting (it is a current divided by that wavelength's sensitivity), so it is read at every wavelength. Negligible only above ~2 nW.
+
+**Zeroing the diode:** with zero off, the meter shows the detector's offset as part of the power, and anything below 0 is clipped to `+0.0000E+00`. Zeroing stores the reading at that moment and subtracts it from every later reading, so the dark sits at 0 and can go negative. Whatever light is on the detector while you zero is subtracted too, so it must be dark.
+
+1. Check the OD3 attenuator cap is off (`PM:ATT?` → `0`). It is not a dark cap: it only cuts the light by 1000×.
+2. Make the detector dark: a light-tight cap on it, or `bin/monochromator.sh dark` with the box closed.
+3. Wait ~5 s for the reading to settle (filter 1).
+4. `bin/newport_powermeter.sh 'PM:ZERO 1'`. The front-panel ZERO button does the same.
+5. Check: `PM:ZERO?` → `1`, and the reading 0 ± 1 pW.
+
+Zero once at the start of a session. The dark still drifts after that (see Dark level above), so a zero does not replace taking darks. `bin/lamp_scan.sh` warns when zero is off.
 
 **Older 1830 commands** also work: `Z?` zero, `R?` range, `U?` units, `W?` wavelength, `A?` attenuator, `F?` filter, `D?` reading (clipped at 0 like `PM:Power?`).
 
@@ -312,6 +324,8 @@ Example: `131` = 128 + 2 + 1 = fresh reading plus two old errors. For QE work, w
 ## Monochromator and lamp (QE light source)
 
 Reachable from this machine since 28 Oct 2026: the NI GPIB-USB-HS (`3923:709b`, moved here from the Windows laptop) is `/dev/gpib0` through linux-gpib 4.3.7 (built from source in `~/linux-gpib-4.3.7`, installed in `/usr/local`; rebuild the kernel part after a kernel update). The controller is at GPIB address 1 (`GPIB0::1::INSTR` in the laptop's LabVIEW). `/etc/gpib.conf` has no device entry, so open it with `ibdev(0, 1, 0, …)` and set EOS = CR with REOS yourself.
+
+After switching the controller on: `monochromator.sh start`, read the wavelength off the monochromator, `monochromator.sh set NM`.
 
 | Command | What it does | Seen 28 Oct |
 | --- | --- | --- |
@@ -325,11 +339,7 @@ Reachable from this machine since 28 Oct 2026: the NI GPIB-USB-HS (`3923:709b`, 
 | `bin/monochromator.sh speed [MIN MAX MS]` | Read the motor speed (start and top speed in steps/s, ramp in ms), or set it until the next `move`/`dark`, which put `MONO_SPEED` back | 29 Oct: `speed` → start 150, top 225 steps/s (11.25 nm/s), ramp 2000 ms |
 | `bin/monochromator.sh raw CMD…` | ISA commands as they are, one reply per line (`\r` = CR, `\x00` = NUL); no limits checked | `raw ' ' E 'H0\r' K` → `f`, `oz`, `o12000`, `o0` |
 
-Limits (`MONO_MIN`/`MONO_MAX`, 200–870 nm), steps per nm, backlash overshoot, motor speed and move timeout are in `db/testbench.conf`. `move` and `dark` first set the speed to `MONO_SPEED` if the controller holds anything else (it forgets it at power-off; the old LabVIEW program or a `raw 'B0,…'` may have changed it). Moves are refused while the position reads 0 (not set since power-on). Every `start`, `set` and `move` goes to `logs/testbench.log`.
-
-After switching the controller on: `monochromator.sh start`, read the wavelength off the monochromator, `monochromator.sh set NM`.
-
-**Lamp spectrum with a dark at every point:** `bin/lamp_scan.sh FROM TO STEP` (e.g. `200 850 25`, about 25 min). At each wavelength it moves there, sets the power meter to it, reads the light, parks in the dark, reads the dark and saves light, dark and light − dark with its error to `logs/scans/<date>_<time>_<name>/`. Nothing is touched, so the box stays closed. Zero the meter (cap, `PM:ZERO 1`) once before; the scan warns if zero is off. Each light and dark value is the median of its readings, so a single spike (seen 29 Oct: +10 to +25 pW for one reading) is left out; a measurement whose readings spread too much is taken again once, and the CSV's `flags` column says so (`spike-`, `retaken-`, `noisy-light/dark`). `--samples`, `--settle`, `--max-spread`, `--name`, `--note` (write down the cables and what is on the sphere), `--stay`. Plot it with `analysis/lamp_scan/plot_lamp_scan.sh [scan]` (default: the newest lamp scan): `<scan>_spectrum.png` in the scan's folder.
+Limits (`MONO_MIN`/`MONO_MAX`, 200–750 nm: the H20 UV's specified range), steps per nm, backlash overshoot, motor speed and move timeout are in `db/testbench.conf`. `move` and `dark` first set the speed to `MONO_SPEED` if the controller holds anything else (it forgets it at power-off; the old LabVIEW program or a `raw 'B0,…'` may have changed it). Moves are refused while the position reads 0 (not set since power-on). Every `start`, `set` and `move` goes to `logs/testbench.log`.
 
 - **Lamp:** Hamamatsu L7893, deuterium + tungsten-halogen, 200–1100 nm, into the monochromator by SMA fibre. Front-panel switches only. Warm up at least 30 min (stability is specified from then: 0.3 %/h drift). Don't switch it off for darks.
 - **Monochromator:** Jobin Yvon H20 UV (200 mm), with an ISA/JY controller speaking the "ISA Command Set". The laptop's `H20 Control.vi` (Glasgow, 2005) scans through ISA's LabVIEW driver (`Isa_user.llb`, `Isa_comm.llb`; manual: `from_GLADD/monochromator/equipment/LabView_Manual.pdf`) and stops at a software limit of 870 nm. From the driver's labels and comments:
@@ -338,12 +348,10 @@ After switching the controller on: `monochromator.sh start`, read the wavelength
   - **Motor commands** (motor 0 = grating): `H0`+CR read position (steps), `F0,<steps>`+CR move relative, `G0,<steps>`+CR set the current position without moving, `E` busy check (`q` = busy, `z` = not busy), `K` limit status (`o0` = no limit switch hit), `L` stop. Commands that take parameters end with CR; `A` and `E` are sent bare. Over GPIB each reply ends with EOI. Seen 28 Oct: `E` → `oz`, `H0`+CR → `o0`+CR; `G0,6980`+CR → `o` (grating found at 349 nm); `F0,5020`+CR → `o`, `E` → `oq` while moving, `oz` after a few seconds, then `H0` → `o12000`+CR (600 nm). `F` worked without `A` first.
   - **Shutter:** `W`/`X` open/close, one parameter (shutter number). 29 Oct: `X0`/`W0`/`X1`/`W1` answered `o` but the light did not change: no shutter is fitted in the beam.
   - **Position after power-on:** the controller forgets it (it came up in boot mode and `H0` read 0 on 28 Oct). Read the wavelength off the monochromator itself, then tell the controller with `G0,<20 × nm>` before any move. Don't trust the last value LabVIEW showed: on 28 Oct it said 600 nm but the drive was at 349 nm.
-- **Darks:** `monochromator.sh dark` (grating at 100 nm), checked against the capped diode on 29 Oct. Never near 0 nm: that's zero order, white light (1.27 nW into the sphere on 29 Oct, ~50× a single wavelength).
+- **Darks:** `monochromator.sh dark` (grating at 100 nm), checked against the capped diode on 29 Oct. Never near 0 nm: that's zero order, white light (1.27 nW into the sphere on 29 Oct, ~50× a single wavelength). After a dark, check that the monochromator's counter agrees with `monochromator.sh pos`: the long move down and back is where steps were lost (see Troubleshooting).
 - **Slits:** fixed-width inserts (0.5, 1 or 2 mm on the H20, not marked); the two sliders are the slit height limiters (1–8 mm). A scan across the deuterium 656.1 nm line (29 Oct, 0.5 nm steps) gave a flat-topped peak 7.4 nm wide (FWHM), i.e. the 2 mm inserts at ~4–5 nm per mm. With a 400 µm fibre the fibre, not the slit, sets how much light gets in.
-- **Lost steps (29 Oct):** after the full scan the grating stayed near the top of its range while the controller counted it down to 100 nm, and later downward moves fell 1–30 % short of their target (the counter read higher than the controller). The controller cannot see this: it only counts steps. The speed was 300→450 steps/s, ramp 1 s, held by the controller (no script set it); it is now halved (`MONO_SPEED`). Until moves are known to land, compare the counter with `monochromator.sh pos` after a move, and check a line (zero order, 656.1 nm) before and after a scan.
-- **Wavelength calibration:** in the same scan the 656.1 nm line peaked at about 661 nm on the controller, so the controller may read ~5 nm high. Not yet confirmed (check the 486.0 nm line, and the monochromator's counter against `monochromator.sh pos`).
 - **Cables (29 Oct, into the sphere):** of the two lamp → monochromator cables, the black one (HPK s/n FB0110, STU100H) gives ~2× the light of the yellow one (HPK s/n 0094, 105002143-3). Unscrewing and refitting a cable changed the light by up to 30 %: don't touch the cables between a reference and a detector measurement.
-- **Second order:** above about 400 nm the grating also passes λ/2 UV light; use an order-sorting long-pass filter there, or the QE comes out too high.
+- **Second order (TBD: check):** above about 400 nm the grating also passes λ/2 UV light; use an order-sorting long-pass filter there, or the QE comes out too high. Not yet checked on this bench.
 - **Steps:** 20 motor steps per nm, position = 20 × wavelength (600 nm = 12000 steps).
 - **Still needed from the laptop:** the other Spectrometer Setup panel values (backlash, limits, Auto/Manual calibration); they're not readable from the copied `.llb` files. `CommDevDLL.dll` belongs to ISA's "HW Config and Control" program and only moves bytes (serial or GPIB); it holds no commands.
 
@@ -360,7 +368,8 @@ After switching the controller on: `monochromator.sh start`, read the wavelength
 | `warning: zero check is ON` | Input shunted | `bin/keithley6487.sh zcheck off` |
 | `pilas: … not allowed!` on `set tune` | Tune mode is auto | `bin/pilas.sh set tm 0` first |
 | Power readings look wrong | Power meter wavelength not set | `bin/newport_powermeter.sh 'PM:Lambda <nm>'` |
-| Power meter reads exactly `+0.0000E+00` everywhere | Zero off and the dark below 0; or no light: lamp fibre unplugged (28–29 Oct), OD3 attenuator on the diode | Cap the diode, `PM:ZERO 1`; check the fibre at the lamp and the front of the diode; zero order (white light) should give ~1 nW |
+| Power meter reads exactly `+0.0000E+00` everywhere | OD3 attenuator cap on the detector (28–29 Oct); no light (lamp fibre unplugged); or zero off with the dark below 0 | Take the cap off (or `PM:ATT 1` if it should be on); check the fibre at the lamp and the sphere; dark the detector and `PM:ZERO 1` |
+| Monochromator ends short of its target; its counter disagrees with `monochromator.sh pos` | Drive jamming (29 Oct: motor heard jamming, wheel sticking; long downward moves lost 1–30 % of their steps) | Unscrew the back plate, oil the drive thread and the counter mechanism; then `monochromator.sh set NM` from the counter. `MONO_SPEED` was halved meanwhile: once moves land again it can go back to `300,450,1000` |
 | Power meter `cannot claim USB interface` | Another program has the meter (a `watch` in another terminal) | Stop it: only one program at a time |
 | No alarm sound on the remote desktop | Audio tunnel not up | `ss -ltn \| grep 24713` on the lab PC; check `RemoteForward 24713 127.0.0.1:4713` in `~/.ssh/config` and reconnect `ssh <lab-pc>` |
 | HV or laser packet says FAILED | Port busy or device off at begin-run | Close the GUI or switch the device on; the run itself is unaffected |

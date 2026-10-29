@@ -63,7 +63,7 @@ analysis knows what the data is without a run sheet.
   takes one run per point. Acquisition only: fit and plot the gain afterwards with
   `analysis/gain_hv/fit_hv_scan.sh logs/scans/<scan>` (`--spot` sums a group of pixels).
 - `bin/lamp_scan.sh FROM TO STEP` measures the lamp through the monochromator on the power meter,
-  with a dark at every wavelength (grating parked, nothing touched); plot it with
+  with darks before and after (grating parked, nothing touched), interpolated in time; plot it with
   `analysis/lamp_scan/plot_lamp_scan.sh`.
 - Every scan gets its own folder, `logs/scans/<date>_<time>_<name>/`: the scan's CSV and `.txt`, and
   whatever analysis output belongs to it. Plots and files from single-run studies go in

@@ -1,8 +1,9 @@
 #! /bin/bash
 #
-# Lamp spectrum through the monochromator, read on the Newport power meter, with a dark taken
-# at every wavelength by parking the grating at MONO_DARK: nothing is capped or touched, so the
-# box stays closed and the dark follows the meter's drift (tens of pW per hour, 29 Oct 2026).
+# Lamp spectrum through the monochromator, read on the Newport power meter, with darks taken
+# before and after the scan by parking the grating at MONO_DARK: nothing is capped or touched, so
+# the box stays closed. The meter's dark drifts (tens of pW per hour, 29 Oct 2026), so each
+# point's dark is interpolated in time between the two.
 #
 #   lamp_scan.sh FROM TO STEP [options]      wavelengths [nm], TO included when it falls on the grid
 #
@@ -14,9 +15,12 @@
 #   --max-spread P  retake a measurement once when its readings spread over more than P pW, or 5 % of
 #                   the value if that is more (default 2)
 #
-# Each point: monochromator.sh move NM, meter wavelength set to NM, read the light; then
-# monochromator.sh dark, the meter still at NM, read the dark; net = light - dark. Every move up to
-# NM starts from the dark position, so each wavelength is approached from below.
+# First the grating goes to the dark position and the dark is read with the meter set to every
+# wavelength of the scan in turn (the meter converts current to power with each wavelength's
+# sensitivity, so the dark in W depends on it). Then the light, going up from FROM to TO, so every
+# point is approached from below. Then the darks again. Each point's dark is the straight line in
+# time between its two darks: net = light - dark. The grating travels down to the dark only twice,
+# not once per point (it lost steps on long moves, 29 Oct).
 # Spikes (single readings tens of pW off) are kept out: a measurement is the median of its readings,
 # its spread the standard deviation of the readings within 3 robust sigmas (+0.5 pW) of the median.
 # Flags in the CSV: spike-light/-dark (a reading left out), retaken-light/-dark (spread too large,
@@ -24,15 +28,16 @@
 # Before the scan the meter is set to watts, running and autorange; filter, zero and attenuator are
 # left as they are and recorded. Use zero on (PM:ZERO 1 with the detector dark): with zero off,
 # readings below 0 show as 0 and the dark is lost.
-# Output: logs/scans/<date>_<time>_<name>/, <scan>.csv (one line per point, powers in W) and
-# <scan>.txt (parameters, meter settings). Ctrl-C stops; the points so far are kept.
+# Output: logs/scans/<date>_<time>_<name>/, <scan>.csv (one line per point, powers in W),
+# <scan>_darks.csv (every dark reading) and <scan>.txt (parameters, meter settings). Ctrl-C stops;
+# the points so far are kept, with the first darks only (flag dark-start-only).
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 BIN=$TB_ROOT/bin
 PM=$BIN/newport_powermeter.sh
 MONO=$BIN/monochromator.sh
 
-usage() { sed -n '3,29p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 ORIG_ARGS=("$@")
 tb_site
@@ -82,18 +87,23 @@ SCAN_NAME=${LABEL:-lamp}
 SCAN_NAME=${SCAN_NAME//[^A-Za-z0-9_.-]/_}
 SCAN_DIR=$TB_LOGS/scans/${STAMP}_$SCAN_NAME
 CSV=$SCAN_DIR/${STAMP}_$SCAN_NAME.csv
+DARKS=$SCAN_DIR/${STAMP}_${SCAN_NAME}_darks.csv
 mkdir -p "$SCAN_DIR" || tb_die "cannot create $SCAN_DIR"
 {
     printf 'started   %s\ncommand   %s\nnote      %s\n' "$(date -d @$SCAN_ID '+%F %T')" "$0 ${ORIG_ARGS[*]}" "$NOTE"
-    printf 'points    %s (%s-%s nm, step %s), dark at %s nm after each\n' "$NPOINTS" "$FROM" "$TO" "$STEP" "$MONO_DARK"
+    printf 'points    %s (%s-%s nm, step %s); darks at %s nm before and after, at every wavelength\n' "$NPOINTS" "$FROM" "$TO" "$STEP" "$MONO_DARK"
     printf 'samples   %s per measurement, 1 s apart, after %s s settling\n' "$SAMPLES" "$SETTLE"
     printf 'meter     %s; units %s, filter %s, zero %s, attenuator %s, autorange on\n' "$IDN" "$UNITS" "$FILTER" "$ZERO" "$ATT"
     printf 'retake    when the readings spread over more than %s pW (or 5 %% of the value)\n' "$MAX_SPREAD"
-    printf 'csv       powers in W; light/dark = median of the readings, *_sd = their standard deviation\n'
-    printf '          without spikes; net_err = standard error of light - dark; flags: see lamp_scan.sh -h\n'
+    printf 'csv       powers in W; light = median of the readings, light_sd = their standard deviation\n'
+    printf '          without spikes; dark = interpolated in time between the darks before and after\n'
+    printf '          (_darks.csv), dark_err its standard error; net_err = standard error of light - dark;\n'
+    printf '          flags: see lamp_scan.sh -h\n'
 } > "$SCAN_DIR/${STAMP}_$SCAN_NAME.txt"
-echo "time,nm,light_W,light_sd_W,dark_W,dark_sd_W,net_W,net_err_W,range_light,range_dark,flags" > "$CSV"
-tb_log "lamp scan $SCAN_NAME start: $NPOINTS points $FROM-$TO nm step $STEP, dark at $MONO_DARK nm, log $CSV"
+HEADER="time,nm,light_W,light_sd_W,dark_W,dark_err_W,net_W,net_err_W,range_light,range_dark,flags"
+echo "$HEADER" > "$CSV"
+echo "time,nm,when,dark_W,dark_sd_W,n,range,flags" > "$DARKS"
+tb_log "lamp scan $SCAN_NAME start: $NPOINTS points $FROM-$TO nm step $STEP, darks at $MONO_DARK nm before and after, log $CSV"
 
 # SAMPLES readings 1 s apart -> "readings;ranges;flags" (readings in W, space-separated)
 readings() {
@@ -148,27 +158,70 @@ measure() {
     echo "$m $sd $k $hi ${flags:--}"
 }
 
-trap 'echo ; tb_log "lamp scan $SCAN_NAME interrupted, $CSV" ; tb_die "interrupted: the points so far are in $CSV"' INT
+# darks at every wavelength, the grating parked: WHEN (start|end)
+declare -A DK_M DK_E DK_T DK_R DK_F
+dark_pass() {
+    local when=$1 nm m sd n r f
+    "$MONO" dark > /dev/null || exit 1
+    echo "darks ($when), grating at $MONO_DARK nm:"
+    for nm in $PLAN ; do
+        pm "PM:Lambda $(printf '%.0f' "$nm")" > /dev/null
+        read -r m sd n r f <<< "$(measure dark)"
+        [ -n "$f" ] || exit 1
+        echo "$(date '+%F %T'),$nm,$when,$m,$sd,$n,$r,$f" >> "$DARKS"
+        DK_M[$when,$nm]=$m DK_E[$when,$nm]=$(awk -v s=$sd -v n=$n 'BEGIN { printf "%.3e", s / sqrt(n) }')
+        DK_T[$when,$nm]=$(date +%s) DK_R[$when,$nm]=$r DK_F[$when,$nm]=$f
+        awk -v nm=$nm -v m=$m -v f="$f" 'BEGIN { printf "%8s %12.2f pW  %s\n", nm, m * 1e12, f == "-" ? "" : f }'
+    done
+}
 
+# light - dark for every point so far -> the CSV, rewritten whole. Before the end darks, the start
+# dark is used as it is (flag dark-start-only); after them, the line in time between the two.
+LM=() LS=() LN=() LR=() LF=() LT=() LD=()
+write_csv() {
+    local i nm f
+    echo "$HEADER" > "$CSV.new"
+    for (( i = 0 ; i < ${#LD[@]} ; i++ )) ; do
+        nm=${LD[i]}
+        f="${LF[i]} ${DK_F[start,$nm]}"
+        if [ -n "${DK_T[end,$nm]}" ] ; then f+=" ${DK_F[end,$nm]}" ; else f+=" dark-start-only" ; fi
+        f=$(echo "$f" | tr ' |' '\n\n' | grep -v '^-$' | grep . | sort -u | paste -sd'|')
+        awk -v t="${LT[i]}" -v nm=$nm -v l=${LM[i]} -v ls=${LS[i]} -v ln=${LN[i]} -v lr=${LR[i]} -v f="${f:--}" \
+            -v t0=${DK_T[start,$nm]} -v d0=${DK_M[start,$nm]} -v e0=${DK_E[start,$nm]} -v r0=${DK_R[start,$nm]} \
+            -v t1="${DK_T[end,$nm]}" -v d1="${DK_M[end,$nm]}" -v e1="${DK_E[end,$nm]}" -v r1="${DK_R[end,$nm]}" 'BEGIN {
+            split(t, a, "|") ; ts = a[1]
+            if (t1 == "") { d = d0 ; e = e0 ; r = r0 }
+            else { x = (ts - t0) / (t1 - t0) ; d = d0 + x * (d1 - d0)
+                   e = sqrt((1 - x) ^ 2 * e0 ^ 2 + x ^ 2 * e1 ^ 2) ; r = r1 > r0 ? r1 : r0 }
+            printf "%s,%s,%s,%s,%.6e,%.3e,%.6e,%.3e,%s,%s,%s\n", a[2], nm, l, ls, d, e, l - d,
+                   sqrt(ls * ls / ln + e * e), lr, r, f }' >> "$CSV.new"
+    done
+    mv "$CSV.new" "$CSV"
+}
+
+trap 'echo ; tb_log "lamp scan $SCAN_NAME interrupted, $CSV" ; tb_die "interrupted: the points so far are in $CSV (with the start darks only)"' INT
+
+dark_pass start
+echo "light:"
 printf '%8s %12s %12s %12s %10s\n' nm "light [pW]" "dark [pW]" "net [pW]" "± [pW]"
 for nm in $PLAN ; do
     "$MONO" move "$nm" > /dev/null || exit 1
     pm "PM:Lambda $(printf '%.0f' "$nm")" > /dev/null
-    read -r LM LS LN LR LF <<< "$(measure light)"
-    [ -n "$LF" ] || exit 1
-    "$MONO" dark > /dev/null || exit 1
-    read -r DM DS DN DR DF <<< "$(measure dark)"
-    [ -n "$DF" ] || exit 1
-    flags=$(echo "$LF $DF" | tr ' |' '\n\n' | grep -v '^-$' | grep . | sort -u | paste -sd'|')
-    line=$(awk -v l=$LM -v ls=$LS -v ln=$LN -v d=$DM -v ds=$DS -v dn=$DN 'BEGIN {
-        printf "%.6e,%.3e", l - d, sqrt(ls * ls / ln + ds * ds / dn) }')
-    echo "$(date '+%F %T'),$nm,$LM,$LS,$DM,$DS,$line,$LR,$DR,${flags:--}" >> "$CSV"
-    awk -v nm=$nm -v l=$LM -v d=$DM -v nl="$line" -v f="$flags" 'BEGIN { split(nl, x, ",")
-        printf "%8s %12.2f %12.2f %12.2f %10.2f  %s\n", nm, l * 1e12, d * 1e12, x[1] * 1e12, x[2] * 1e12, f }'
+    read -r m sd n r f <<< "$(measure light)"
+    [ -n "$f" ] || exit 1
+    LT+=("$(date +%s)|$(date '+%F %T')") LD+=("$nm") LM+=("$m") LS+=("$sd") LN+=("$n") LR+=("$r") LF+=("$f")
+    write_csv
+    tail -1 "$CSV" | awk -F, '{ printf "%8s %12.2f %12.2f %12.2f %10.2f  %s\n", $2, $3 * 1e12, $5 * 1e12, $7 * 1e12, $8 * 1e12, $11 == "-" ? "" : $11 }'
 done
+last=$nm
+dark_pass end
+write_csv
 trap - INT
 
-[ -n "$STAY" ] && "$MONO" move "$nm" > /dev/null
+echo "light - dark, the dark interpolated in time:"
+printf '%8s %12s %12s %12s %10s\n' nm "light [pW]" "dark [pW]" "net [pW]" "± [pW]"
+tail -n +2 "$CSV" | awk -F, '{ printf "%8s %12.2f %12.2f %12.2f %10.2f  %s\n", $2, $3 * 1e12, $5 * 1e12, $7 * 1e12, $8 * 1e12, $11 == "-" ? "" : $11 }'
+[ -n "$STAY" ] && "$MONO" move "$last" > /dev/null
 tb_log "lamp scan $SCAN_NAME done: $CSV"
 echo "done: $CSV"
-echo "grating $( [ -n "$STAY" ] && echo "at $nm nm" || echo "parked at the dark position ($MONO_DARK nm)" )"
+echo "grating $( [ -n "$STAY" ] && echo "at $last nm" || echo "parked at the dark position ($MONO_DARK nm)" )"

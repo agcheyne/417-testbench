@@ -8,13 +8,14 @@
 #           default: the newest lamp scan in logs/scans/
 #
 # Writes <scan>_spectrum.png in the scan's folder (light - dark against wavelength, with the light
-# and dark as read; the dark against time) and prints the table in pW. Running it again, e.g. on a
+# and dark; the darks before and after the scan, or for older scans the dark against time) and
+# prints the table in pW. Running it again, e.g. on a
 # scan that was stopped and is now complete, overwrites the plot.
 
 . "$(dirname "$(readlink -f "$0")")/../../lib/tb.sh"
 HERE=$(dirname "$(readlink -f "$0")")
 
-usage() { sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 SCAN=
 while [ $# -gt 0 ] ; do
@@ -46,6 +47,6 @@ command -v root > /dev/null || tb_die "no root in PATH (source the ROOT setup fi
 
 echo "scan $NAME: $(( $(wc -l < "$CSV") - 1 )) points"
 sed -n 's/^note *//p' "$PREFIX.txt" 2> /dev/null | sed 's/^/  note: /'
-( cd "$HERE" && root -b -q -l "plot_lamp_scan.C(\"$CSV\", \"$PREFIX\")" ) 2>&1 | grep -v '^Info in\|^Processing\|^$'
+( cd "$HERE" && root -b -q -l "plot_lamp_scan.C(\"$CSV\", \"$PREFIX\", \"${PREFIX}_darks.csv\")" ) 2>&1 | grep -v '^Info in\|^Processing\|^$'
 [ -e "${PREFIX}_spectrum.png" ] || tb_die "no plot was written"
 echo "  ${PREFIX}_spectrum.png"
