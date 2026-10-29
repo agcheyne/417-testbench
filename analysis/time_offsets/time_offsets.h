@@ -12,7 +12,7 @@ void set_signal_window(double from_ns = 17, double to_ns = 35);   // relative to
 void set_min_amplitude(double mv = 4.0);     // pulses used: at least this high (well clear of the noise)
 
 // --- data ------------------------------------------------------------------------------------
-void add_scan(const char *csv);              // every run of a scan_xy.sh log (logs/scans/*.csv)
+void add_scan(const char *csv);              // every run of a scan_xy.sh log (logs/scans/<scan>/<scan>.csv)
 void add_run(const char *filename);          // one run (all its parts); or pfileopen() + prun()
 void save_times(const char *filename);       // the pulse times, to refit later without the data
 void load_times(const char *filename);

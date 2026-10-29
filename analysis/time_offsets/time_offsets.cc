@@ -2,8 +2,8 @@
 // pixel, written to the db for the online monitor and the analyses (lib/tb_v1742.h TimeOffsets).
 //
 //   ./time_offsets.sh
-//   root [1] add_scan("../../logs/scans/20261027_115115_photonis_readout0_map.csv")   // ~15 min
-//   root [2] fit_offsets() ; draw_offsets() ; save_plots("../../logs/scans/time_offsets_0049_5G")
+//   root [1] add_scan("../../logs/scans/20261027_115115_photonis_readout0_map/20261027_115115_photonis_readout0_map.csv")   // ~15 min
+//   root [2] fit_offsets() ; draw_offsets() ; save_plots("../../logs/scans/<scan>/time_offsets_0049_5G")
 //   root [3] write_db("Photonis readout-0 scan; inputs 0-15 cable one pin off")
 //   root [4] save_times("readout0_times.root")    // later: load_times(...) ; fit_offsets() in seconds
 //

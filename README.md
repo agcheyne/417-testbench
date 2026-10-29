@@ -59,6 +59,12 @@ analysis knows what the data is without a run sheet.
 - `daq/setup_rcdaq.sh` (try `--dry-run` first) configures rcdaq and the V1742 from the selected profile.
 - `bin/scan_xy.sh` steps the stage over a grid and takes one rcdaq run per point
   (`--dry-run` prints the plan; `scan_xy.sh --quit` stops after the current point).
+- `bin/scan_hv.sh` steps one CAEN channel through a list of voltages (it must already be on) and
+  takes one run per point. Acquisition only: fit and plot the gain afterwards with
+  `analysis/gain_hv/fit_hv_scan.sh logs/scans/<scan>` (`--spot` sums a group of pixels).
+- Every scan gets its own folder, `logs/scans/<date>_<time>_<name>/`: the scan's CSV and `.txt`, and
+  whatever analysis output belongs to it. Plots and files from single-run studies go in
+  `logs/runs/run<N>/`. The HV logs and `testbench.log` stay at the top of `logs/`.
 - `bin/motor.sh` moves and reads the XY stage.
 
 ## Analysis

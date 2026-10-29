@@ -223,7 +223,7 @@ bin/scan_xy.sh -x 60:80:2 -y 70:90:2 -n 10000 --name tile66_map --dry-run
 - **Stop after the current point:** `bin/scan_xy.sh --quit`. The stage then goes to the rest position.
 - **Ctrl-C** ends the current run at once, stops the motors and leaves the stage where it is.
 - **Laser:** however the scan ends (finished, `--quit`, Ctrl-C), the PiLas is switched off unless `--keep-laser` is given. The HV is never touched.
-- **Log:** `logs/scans/<date>_<name>.csv`, one line per point: target and read-back position, run number, events, times. The `.txt` next to it has the parameters and the exact command.
+- **Log:** one folder per scan, `logs/scans/<date>_<time>_<name>/`. In it, `<date>_<time>_<name>.csv` has one line per point (target and read-back position, run number, events, times) and the `.txt` the parameters and the exact command. The scan's analysis output (maps, plots) goes in the same folder.
 - **Set up rcdaq with `daq/setup_rcdaq.sh`**, or the scan point is only in the CSV, not in the data (the scan warns).
 
 ## Keithley 6487 picoammeter + voltage source (`keithley6487.sh`)

@@ -26,8 +26,10 @@
 #
 # Each point: move X then Y (bin/motor.sh, waits for arrival), write state/scan_point.conf
 # (picked up into begin-run packets 910/911 when rcdaq was set up with daq/setup_rcdaq.sh),
-# daq_begin, wait for N events or T seconds, daq_end. One CSV line per point goes to
-# logs/scans/<scan>.csv, with the run number and the position read back.
+# daq_begin, wait for N events or T seconds, daq_end. Each scan gets its own folder,
+# logs/scans/<scan>/ (<scan> = <date>_<time>_<name>): one CSV line per point goes to <scan>.csv
+# there, with the run number and the position read back; <scan>.txt has the parameters. Put the
+# scan's analysis output (maps, plots) in the same folder.
 #
 # Stopping: "scan_xy.sh --quit" (or touch state/scan.quit) finishes the current point, then
 # goes to the rest position. Ctrl-C ends the current run at once, stops the motors and
@@ -129,7 +131,8 @@ SCAN_ID=$(date +%s)
 STAMP=$(date -d @$SCAN_ID +%Y%m%d_%H%M%S)
 SCAN_NAME=${LABEL:-scan}
 SCAN_NAME=${SCAN_NAME//[^A-Za-z0-9_.-]/_}
-CSV=$TB_LOGS/scans/${STAMP}_$SCAN_NAME.csv
+SCAN_DIR=$TB_LOGS/scans/${STAMP}_$SCAN_NAME
+CSV=$SCAN_DIR/${STAMP}_$SCAN_NAME.csv
 
 echo "scan '$SCAN_NAME': $NPOINTS points, $( [ -n "$EVENTS" ] && echo "$EVENTS events" || echo "$SECONDS_PER s") per point, run type $RUNTYPE"
 echo "  detector $TB_DETECTOR, DAQ profile $TB_DAQ"
@@ -152,6 +155,8 @@ rcdaq_client daq_list_runtypes -s 2> /dev/null | grep -qw -- "$RUNTYPE" || tb_di
 RULE=$(rcdaq_client daq_list_runtypes 2> /dev/null | awk -v t="$RUNTYPE" '$1 == t && $2 == "-" { print $3 }')
 [ -d "$(dirname "$RULE")" ] && [ -w "$(dirname "$RULE")" ] ||
     tb_die "rcdaq would write $RUNTYPE runs to $(dirname "$RULE"), which does not exist or is not writable (daq/setup_rcdaq.sh creates it)"
+rcdaq_client daq_status -l 2> /dev/null | grep -q 'Logging enabled' ||
+    tb_die "rcdaq file logging is disabled: the runs would not be written (rcdaq_client daq_open)"
 READLIST=$(rcdaq_client daq_list_readlist)
 echo "$READLIST" | grep -q 'Subevent id: 2000' || tb_die "rcdaq reads no V1742 (packet 2000): run daq/setup_rcdaq.sh"
 echo "$READLIST" | grep -q 'Subevent id: 910' ||
@@ -201,7 +206,7 @@ if [ -z "$YES" ] ; then
 fi
 
 # --- the scan ----------------------------------------------------------------------------
-mkdir -p "$TB_LOGS/scans" "$TB_STATE"
+mkdir -p "$SCAN_DIR" "$TB_STATE"
 rm -f "$QUIT"
 echo "point,target_x_mm,target_y_mm,x_mm,y_mm,run,events,start,end,status" > "$CSV"
 tb_log "scan $SCAN_NAME start: $NPOINTS points, detector $TB_DETECTOR, DAQ $TB_DAQ, run type $RUNTYPE, log $CSV"

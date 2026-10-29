@@ -3,7 +3,7 @@
 // Stage 1, one run per scan point:
 //   ./scan_map.sh
 //   root [1] set_signal_window(17, 35)
-//   root [2] add_scan("../../logs/scans/20261030_101500_tile66_map.csv")   // every point of the scan
+//   root [2] add_scan("../../logs/scans/20261030_101500_tile66_map/20261030_101500_tile66_map.csv")   // every point of the scan
 //   root [3] save_points("tile66_points.root")
 // Stage 2, maps and geometry (also from a saved points file, without the data):
 //   root [4] make_maps()                    // or make_maps("tile66_points.root")

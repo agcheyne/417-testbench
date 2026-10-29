@@ -37,7 +37,7 @@ NUM=$ANC_PACKETS/tbinfo_numeric.txt
         tb_table "$(tb_daq_file)"
     fi
     if [ -r "$TB_STATE/scan_point.conf" ] ; then
-        echo "--- scan point (scan_xy.sh)"
+        echo "--- scan point (scan_xy.sh / scan_hv.sh)"
         tb_table "$TB_STATE/scan_point.conf"
     fi
 } > "$TXT" 2>&1
