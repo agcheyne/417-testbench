@@ -65,9 +65,14 @@ static double q_lo = -0.2, q_hi = 2.0;
 static int q_bins = 1100;
 static vector<int> spot_chs;              // channels summed into the extra spectrum SPOT
 const int SPOT = NSIG;                    // index of the spot sum in q[] / fit[] and the functions below
-static int nq() { return spot_chs.empty() ? NSIG : NSIG + 1 ; }
-static string chname(int ch) { return ch == SPOT ? string("spot") : Form("ch %d", ch) ; }
-static string chtag(int ch) { return ch == SPOT ? string("spot") : Form("ch%02d", ch) ; }
+const int ALL = NSIG + 1;                 // set_auto_spot(): every unmasked channel summed
+static bool auto_spot = false;            // set_auto_spot(): the spot chosen per run from its pulses
+static double auto_frac = 0.95;            // the spot's share of the mean charge
+static int auto_min = 30;
+static int nq() { return auto_spot ? NSIG + 2 : spot_chs.empty() ? NSIG : NSIG + 1 ; }
+static string chname(int ch) { return ch == SPOT ? string("spot") : ch == ALL ? string("all") : Form("ch %d", ch) ; }
+static string chtag(int ch) { return ch == SPOT ? string("spot") : ch == ALL ? string("all") : Form("ch%02d", ch) ; }
+static string chcol(int ch) { return ch == SPOT ? string("spot") : ch == ALL ? string("all") : to_string(ch) ; }   // the table's ch column
 
 void set_charge_window(double a, double b) { cuts.q_from = a ; cuts.q_to = b ; }
 void set_events(int n) { n_events_per_run = n ; }
@@ -83,8 +88,16 @@ struct RunData {
   bool hv_given = false;
   bool hv_on = true;                       // from the 941 status bit; given HV = assumed on
   long events = 0;
-  TH1F *q[NSIG + 1] = {};                  // + the spot sum
-  tb::SpeFit fit[NSIG + 1];
+  TH1F *q[NSIG + 2] = {};                  // + the spot sum, + all (set_auto_spot)
+  tb::SpeFit fit[NSIG + 2];
+  vector<TH1F *> qa[NSIG + 2];             // the same in each set_alt_windows() window
+  vector<tb::SpeFit> fa[NSIG + 2];
+  vector<int> spot, noisy;                 // set_auto_spot(): the spot's channels, the ones left out as noisy, pulses per channel
+  long hits[NSIG] = {};
+  vector<float> qev;                       // set_auto_spot(): every event's charges, NSIG x (1 + alt windows), NaN = none
+  vector<char> hev;                        // and its pulses, NSIG per event
+  double contained = NAN, mq_total = NAN;  // the spot's share of the mean charge; that mean charge [pC]
+  double mean_spot = NAN, mean_all = NAN;  // mean of the spot and all sums per event [pC], pedestal included
 };
 static vector<RunData> runs;
 static RunData *cur = nullptr;
@@ -92,6 +105,32 @@ static TProfile *find_prof = nullptr;     // find_window(): average pulse of the
 static long find_pulses = 0;
 static set<int> masked;                   // MASKED_CHANNELS of db/testbench.conf: left out of find_window()
 static bool masked_read = false;
+
+static vector<pair<double, double>> alt_win;
+
+void set_alt_windows(const char *windows)
+{
+  if (!runs.empty()) printf("gain_hv: set_alt_windows only applies to runs added after it\n");
+  alt_win.clear();
+  istringstream is(windows ? windows : "");
+  string w;
+  double a, b;
+  while (is >> w)
+    if (sscanf(w.c_str(), "%lf:%lf", &a, &b) == 2 && a < b) alt_win.push_back({a, b});
+    else printf("gain_hv: set_alt_windows: %s is not FROM:TO\n", w.c_str());
+}
+
+void set_auto_spot(double contain, int min_hits)
+{
+  if (!runs.empty()) printf("gain_hv: set_auto_spot only applies to runs added after it\n");
+  auto_spot = contain > 0;
+  auto_frac = std::min(contain, 1.0);
+  auto_min = min_hits;
+  if (auto_spot) {
+    spot_chs.clear();
+    if (!masked_read) { masked = tb::masked_channels() ; masked_read = true ; }
+  }
+}
 
 void set_spot(const char *channels)
 {
@@ -185,24 +224,151 @@ int process_event(Event *e)
     return 0;
   }
   if (!cur->q[0])
-    for (int ch = 0; ch < nq(); ch++)
+    for (int ch = 0; ch < nq(); ch++) {
       cur->q[ch] = new TH1F(Form("q_run%d_%s", cur->run, chtag(ch).c_str()),
                             Form("run %d %s charge (%.1f to %.1f ns after the trigger);charge [pC];events",
                                  cur->run, chname(ch).c_str(), cuts.q_from, cuts.q_to), q_bins, q_lo, q_hi);
+      for (auto &w : alt_win) {
+        cur->qa[ch].push_back(new TH1F(Form("q_run%d_%s_%g-%g", cur->run, chtag(ch).c_str(), w.first, w.second),
+                                       Form("run %d %s charge (%.1f to %.1f ns after the trigger);charge [pC];events",
+                                            cur->run, chname(ch).c_str(), w.first, w.second), q_bins, q_lo, q_hi));
+        cur->fa[ch].emplace_back();
+      }
+    }
   cur->events++;
   double qspot = 0;
+  vector<double> qspot_alt(alt_win.size(), 0.0);
   size_t nspot = 0;
   tb::Cuts c = cuts;
+  size_t nper = 1 + alt_win.size(), first = cur->qev.size();   // set_auto_spot(): this event's slots
+  if (auto_spot) { cur->qev.resize(first + NSIG * nper, NAN) ; cur->hev.resize(cur->hev.size() + NSIG, 0) ; }
   for (int ch = 0; ch < NSIG; ch++) {
     c.q_from = cuts.q_from + offset(ch);
     c.q_to = cuts.q_to + offset(ch);
+    if (auto_spot) { c.sig_from = c.q_from ; c.sig_to = c.q_to ; }   // a pulse: >= 5 mV inside the charge window
     tb::ChannelHit h = tb::measure(ev, ch, c);
     if (!h.valid) continue;
     cur->q[ch]->Fill(h.q);
-    if (std::find(spot_chs.begin(), spot_chs.end(), ch) != spot_chs.end()) { qspot += h.q ; nspot++ ; }
+    bool in_spot = std::find(spot_chs.begin(), spot_chs.end(), ch) != spot_chs.end();
+    if (in_spot) { qspot += h.q ; nspot++ ; }
+    if (auto_spot) { cur->qev[first + ch * nper] = h.q ; cur->hits[ch] += h.hit ; cur->hev[first / nper + ch] = h.hit ; }
+    for (size_t a = 0; a < alt_win.size(); a++) {
+      tb::Cuts ca = cuts;
+      ca.q_from = alt_win[a].first + offset(ch);
+      ca.q_to = alt_win[a].second + offset(ch);
+      double q = tb::measure(ev, ch, ca).q;
+      cur->qa[ch][a]->Fill(q);
+      if (in_spot) qspot_alt[a] += q;
+      if (auto_spot) cur->qev[first + ch * nper + 1 + a] = q;
+    }
   }
-  if (cur->q[SPOT] && nspot == spot_chs.size()) cur->q[SPOT]->Fill(qspot);
+  if (cur->q[SPOT] && !spot_chs.empty() && nspot == spot_chs.size()) {
+    cur->q[SPOT]->Fill(qspot);
+    for (size_t a = 0; a < alt_win.size(); a++) cur->qa[SPOT][a]->Fill(qspot_alt[a]);
+  }
   return 0;
+}
+
+// set_auto_spot(), after the run. Photoelectrons share their charge between pads, so the gain
+// needs the pads summed; two things keep the pedestal of a sum narrow enough for the fit:
+//  - noisy channels out: robust pedestal width (16-84 % of the events without its pulse) above
+//    1.5x the median channel's (Photonis, 30 Oct 2026: 18, 25 and 28 at 0.016-0.020 pC, the rest 0.010);
+//  - the common mode subtracted per event: pedestal charges are correlated (0.3 within a DRS4
+//    group, 0.2 within a board, 0 across boards), so each channel's charge less the median of its
+//    group's dark channels (fewer than min_hits pulses in the run, at least 2 of them). The sum of
+//    22 dark channels went from 0.107 to 0.029 pC.
+// "spot" is the smallest set of good channels holding `contain` of the run's mean charge (each
+// channel's mean charge per event above its pedestal, from the events without a pulse in any good
+// channel): no cut on pulses, the charge decides. "all" is every good channel. At pixel centres Q1
+// is the same within 1-3 % for 90 %, 95 %, 99 % and all (the far pads add photoelectrons, not
+// charge per photoelectron), while the pedestal widens from ~0.03 to ~0.044 pC.
+static void fill_auto_spot(RunData &r)
+{
+  size_t nper = 1 + alt_win.size(), nev = r.qev.size() / (NSIG * nper);
+  auto Q = [&](size_t e, int ch, size_t k) { return r.qev[(e * NSIG + ch) * nper + k] ; };
+  // robust pedestal width per channel, main window
+  double width[NSIG];
+  vector<double> ws;
+  for (int ch = 0; ch < NSIG; ch++) {
+    vector<float> v;
+    for (size_t e = 0; e < nev; e++) { float q = Q(e, ch, 0) ; if (!std::isnan(q) && !r.hev[e * NSIG + ch]) v.push_back(q) ; }
+    width[ch] = NAN;
+    if (v.size() >= 100) {
+      std::sort(v.begin(), v.end());
+      width[ch] = (v[size_t(0.8413 * v.size())] - v[size_t(0.1587 * v.size())]) / 2;
+      if (!masked.count(ch)) ws.push_back(width[ch]);
+    }
+  }
+  std::sort(ws.begin(), ws.end());
+  double wmed = ws.empty() ? NAN : ws[ws.size() / 2];
+  r.noisy.clear();
+  for (int ch = 0; ch < NSIG; ch++) if (!masked.count(ch) && !(width[ch] <= 1.5 * wmed)) r.noisy.push_back(ch);
+  vector<int> every, dark[NSIG / 8];
+  for (int ch = 0; ch < NSIG; ch++) {
+    if (masked.count(ch) || std::find(r.noisy.begin(), r.noisy.end(), ch) != r.noisy.end()) continue;
+    every.push_back(ch);
+    if (r.hits[ch] < auto_min) dark[ch / 8].push_back(ch);
+  }
+  // the common mode of each event, window and group: median of the group's dark channels
+  const int NG = NSIG / 8;
+  vector<float> cm(nev * nper * NG, 0.f), v;
+  for (size_t e = 0; e < nev; e++)
+    for (size_t k = 0; k < nper; k++)
+      for (int g = 0; g < NG; g++) {
+        v.clear();
+        for (int ch : dark[g]) { float q = Q(e, ch, k) ; if (!std::isnan(q)) v.push_back(q) ; }
+        if (v.size() < 2) continue;
+        std::sort(v.begin(), v.end());
+        size_t m = v.size() / 2;
+        cm[(e * nper + k) * NG + g] = v.size() % 2 ? v[m] : 0.5f * (v[m - 1] + v[m]);
+      }
+  auto C = [&](size_t e, int ch, size_t k) { return cm[(e * nper + k) * NG + ch / 8] ; };
+  // mean charge per channel above its pedestal (main window)
+  double mq[NSIG] = {}, ped[NSIG] = {};
+  long nq_[NSIG] = {}, nquiet = 0;
+  for (size_t e = 0; e < nev; e++) {
+    bool any = false;
+    for (int ch : every) if (r.hev[e * NSIG + ch]) { any = true ; break ; }
+    if (!any) nquiet++;
+    for (int ch : every) { float q = Q(e, ch, 0) ; if (std::isnan(q)) continue ; double y = q - C(e, ch, 0) ; mq[ch] += y ; nq_[ch]++ ; if (!any) ped[ch] += y ; }
+  }
+  double total = 0;
+  for (int ch : every) { mq[ch] = nq_[ch] && nquiet ? mq[ch] / nq_[ch] - ped[ch] / nquiet : 0 ; total += mq[ch] ; }
+  vector<int> order = every;
+  std::sort(order.begin(), order.end(), [&](int a, int b) { return mq[a] > mq[b] ; });
+  r.spot.clear();
+  double cum = 0;
+  if (total > 0)
+    for (int ch : order) { r.spot.push_back(ch) ; cum += mq[ch] ; if (cum >= auto_frac * total) break ; }
+  r.contained = total > 0 ? cum / total : NAN;
+  r.mq_total = total;
+  string list, noisy, ndark;
+  for (int ch : r.spot) list += Form(" %d (%.1f%%)", ch, 100 * mq[ch] / total);
+  for (int ch : r.noisy) noisy += Form(" %d (%.4f)", ch, width[ch]);
+  for (auto &d : dark) ndark += Form(" %zu", d.size());
+  printf("gain_hv: run %d spot (%.0f %% of the mean charge %.4f pC):%s; all: %zu channels, noisy left out:%s (median pedestal width %.4f pC); dark channels per group for the common mode:%s\n",
+         r.run, 100 * auto_frac, total, r.spot.empty() ? " none (no charge)" : list.c_str(), every.size(), noisy.empty() ? " none" : noisy.c_str(), wmed, ndark.c_str());
+  if (!r.spot.empty()) r.q[SPOT]->SetTitle(Form("run %d spot (%s), common mode subtracted;charge [pC];events", r.run, list.c_str() + 1));
+  r.q[ALL]->SetTitle(Form("run %d all %zu good channels summed, common mode subtracted;charge [pC];events", r.run, every.size()));
+  // the sums; their mean (main window, all events, no range cut) for the mean-charge gain
+  double msum[2] = {};
+  long mn[2] = {};
+  for (size_t e = 0; e < nev; e++)
+    for (size_t k = 0; k < nper; k++)
+      for (int idx : {SPOT, ALL}) {
+        const vector<int> &chs = idx == SPOT ? r.spot : every;
+        if (chs.empty()) continue;
+        double s = 0;
+        bool ok = true;
+        for (int ch : chs) { float q = Q(e, ch, k) ; if (std::isnan(q)) { ok = false ; break ; } s += q - C(e, ch, k) ; }
+        if (!ok) continue;
+        if (k == 0) { r.q[idx]->Fill(s) ; msum[idx - SPOT] += s ; mn[idx - SPOT]++ ; }
+        else r.qa[idx][k - 1]->Fill(s);
+      }
+  r.mean_spot = mn[0] ? msum[0] / mn[0] : NAN;
+  r.mean_all = mn[1] ? msum[1] / mn[1] : NAN;
+  vector<float>().swap(r.qev);
+  vector<char>().swap(r.hev);
 }
 
 void add_run(const char *filename, double hv_volts)
@@ -231,6 +397,7 @@ void add_run(const char *filename, double hv_volts)
   }
   printf("gain_hv: run %d, %ld events, HV %.1f V%s\n", cur->run, cur->events, cur->hv, cur->hv_given ? " (given)" : "");
   if (cur->events == 0) { printf("gain_hv: %s left out: no events\n", filename) ; runs.pop_back() ; }
+  else if (auto_spot) fill_auto_spot(*cur);
   cur = nullptr;
 }
 
@@ -313,10 +480,18 @@ void fit_all(int min_entries)
       r.fit[ch] = tb::fit_spe(h);
       const tb::SpeFit &f = r.fit[ch];
       if (!f.f || f.mu <= 0.02 || !f.resolved) { hidden++ ; continue ; }   // no light, or no peak above the pedestal noise
+      string alt;                              // Q1 in the other windows, relative to this one
+      for (size_t a = 0; a < r.qa[ch].size(); a++) {
+        delete r.fa[ch][a].f;
+        r.fa[ch][a] = tb::fit_spe(r.qa[ch][a]);
+        const tb::SpeFit &fa = r.fa[ch][a];
+        alt += fa.ok && fa.resolved ? Form(" %.3f", fa.q1 / f.q1) : " -";
+      }
       const char *note = !f.ok ? "fit did not converge" : f.mu > 3 ? "mu > 3: too much light, not used"
                        : !r.hv_on ? "HV off" : "";
-      printf("  %-6d %8.1f  %-4s  %.3e +- %.1e  %6.3f +- %.3f  %6.2f    %s\n",
-             r.run, r.hv, ch == SPOT ? "spot" : Form("%d", ch), f.gain, f.egain, f.mu, f.emu, f.chi2ndf, note);
+      printf("  %-6d %8.1f  %-4s  %.3e +- %.1e  %6.3f +- %.3f  %6.2f    %s%s%s\n",
+             r.run, r.hv, chcol(ch).c_str(), f.gain, f.egain, f.mu, f.emu, f.chi2ndf, note,
+             alt.empty() ? "" : "  Q1 other windows / Q1:", alt.c_str());
     }
   if (hidden) printf("  (%d run x channel spectra without a photoelectron peak 3 pedestal sigmas clear of the pedestal not shown)\n", hidden);
 }
@@ -402,19 +577,37 @@ void save(const char *prefix)
 {
   string csv = string(prefix) + ".csv", root = string(prefix) + ".root";
   ofstream out(csv);
-  out << "run,hv_V,hv_on,ch,gain,gain_err,mu,mu_err,q1_pC,q1_err,q0_pC,s0_pC,s1_pC,chi2ndf,converged,used\n";
+  out << "run,hv_V,hv_on,ch,gain,gain_err,mu,mu_err,q1_pC,q1_err,q0_pC,s0_pC,s1_pC,chi2ndf,converged,used";
+  for (auto &w : alt_win) out << Form(",q1_%g-%g,q1_err_%g-%g", w.first, w.second, w.first, w.second);
+  out << "\n";
   for (auto &r : runs)
     for (int ch = 0; ch < nq(); ch++) {
       const tb::SpeFit &f = r.fit[ch];
       if (!f.f || f.mu <= 0.02 || !f.resolved) continue;
-      out << r.run << "," << r.hv << "," << r.hv_on << "," << (ch == SPOT ? string("spot") : to_string(ch)) << "," << f.gain << "," << f.egain << "," << f.mu << "," << f.emu << ","
+      out << r.run << "," << r.hv << "," << r.hv_on << "," << chcol(ch) << "," << f.gain << "," << f.egain << "," << f.mu << "," << f.emu << ","
           << f.q1 << "," << f.eq1 << "," << f.q0 << "," << f.s0 << "," << f.s1 << "," << f.chi2ndf << ","
-          << f.ok << "," << (usable(f) && r.hv_on) << "\n";
+          << f.ok << "," << (usable(f) && r.hv_on);
+      for (size_t a = 0; a < alt_win.size(); a++) {   // empty: no peak resolved in that window
+        const tb::SpeFit *fa = a < r.fa[ch].size() ? &r.fa[ch][a] : nullptr;
+        if (fa && fa->ok && fa->resolved) out << "," << fa->q1 << "," << fa->eq1;
+        else out << ",,";
+      }
+      out << "\n";
     }
+  if (auto_spot) {   // each run's spot channels and their pulse counts
+    ofstream sp(string(prefix) + "_spots.csv");
+    sp << "run,spot_channels,pulses,noisy_channels,contained,mean_charge_pC,mean_spot_sum_pC,mean_all_sum_pC\n";
+    for (auto &r : runs) {
+      string c, n, z;
+      for (int ch : r.spot) { c += (c.empty() ? "" : " ") + to_string(ch) ; n += (n.empty() ? "" : " ") + to_string(r.hits[ch]) ; }
+      for (int ch : r.noisy) z += (z.empty() ? "" : " ") + to_string(ch);
+      sp << r.run << "," << c << "," << n << "," << z << "," << r.contained << "," << r.mq_total << "," << r.mean_spot << "," << r.mean_all << "\n";
+    }
+  }
   TFile tf(root.c_str(), "RECREATE");
   for (auto &r : runs)
     for (int ch = 0; ch < nq(); ch++)
-      if (r.q[ch]) r.q[ch]->Write();
+      if (r.q[ch]) { r.q[ch]->Write() ; for (auto *h : r.qa[ch]) h->Write() ; }
   for (int ch = 0; ch < nq(); ch++) {
     TGraphErrors *g = curve(ch);
     if (g->GetN()) g->Write();

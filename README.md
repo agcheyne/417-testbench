@@ -58,7 +58,9 @@ analysis knows what the data is without a run sheet.
 
 - `daq/setup_rcdaq.sh` (try `--dry-run` first) configures rcdaq and the V1742 from the selected profile.
 - `bin/scan_xy.sh` steps the stage over a grid and takes one rcdaq run per point
-  (`--dry-run` prints the plan; `scan_xy.sh --quit` stops after the current point).
+  (`--dry-run` prints the plan; `scan_xy.sh --quit` stops after the current point). With enough
+  events per point (~20000 at low light), `analysis/gain_hv/fit_gain_map.sh logs/scans/<scan>` fits
+  the gain of every channel at every point in parallel jobs and maps it.
 - `bin/scan_hv.sh` steps one CAEN channel through a list of voltages (it must already be on) and
   takes one run per point. Acquisition only: fit and plot the gain afterwards with
   `analysis/gain_hv/fit_hv_scan.sh logs/scans/<scan>` (`--spot` sums a group of pixels).

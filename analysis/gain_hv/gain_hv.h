@@ -26,6 +26,17 @@ bool find_window(const char *listfile, int events = 2000);
 // also sum these channels' charge per event into one more spectrum, the "spot" (channel 32 in
 // the functions below), for photoelectrons that share their charge between pads; "" = none
 void set_spot(const char *channels = "");
+// the spot chosen per run from the data instead (an xy scan, where the light moves over the pads):
+// "all" (channel 33) sums every channel except MASKED_CHANNELS and noisy ones (pedestal > 1.5x the
+// median width), each less its DRS4 group's common mode per event (median of the group's channels
+// with < min_hits pulses); "spot" (channel 32) the same over the smallest set of those channels
+// holding `contain` of the run's mean charge per event. save() lists each run's spot and noisy
+// channels, the share contained and the sums' mean charge in <prefix>_spots.csv. contain <= 0 = off
+void set_auto_spot(double contain = 0.95, int min_hits = 30);
+// other charge windows filled in the same pass and fitted alongside, for the systematic error of
+// the window choice: "FROM:TO FROM:TO ..." [ns], shifted per input like the main window; save()
+// adds their Q1 as columns q1_<from>-<to> and q1_err_<from>-<to>; "" = none
+void set_alt_windows(const char *windows = "");
 
 // --- runs ------------------------------------------------------------------------------------
 // read one run (all its parts if you give part -0000); hv_volts overrides the 941 readback
