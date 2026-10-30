@@ -124,12 +124,13 @@ cmd_check() {
             nr != "" && $3 >= nr + 0 { print "  mapping.txt: row " $3 " but NROWS=" nr }
             nc != "" && $4 >= nc + 0 { print "  mapping.txt: col " $4 " but NCOLS=" nc }
             (($1 " " $2) in ch) { print "  mapping.txt: slot " $1 " channel " $2 " listed twice" }
-            (($3 " " $4) in px) { print "  mapping.txt: pixel " $3 "," $4 " listed twice" }
-            { ch[$1 " " $2] ; px[$3 " " $4] }
+            (($1 " " $3 " " $4) in px) { print "  mapping.txt: slot " $1 " pixel " $3 "," $4 " listed twice" }
+            { ch[$1 " " $2] ; px[$1 " " $3 " " $4] }
         ' | problems
         [ -r "$f/cabling.txt" ] || err "cabling.txt missing"
-        # first input: mapping.txt "slot channel", second: cabling.txt "packet slot"
-        awk 'FNR == NR { chans[$1] = chans[$1] " " $2 ; next }
+        # first input: mapping.txt "slot channel row col", second: cabling.txt "packet slot". Slots may
+        # share pixels (the same readout plugged in another way), but the slots read may not
+        awk 'FNR == NR { chans[$1] = chans[$1] " " $2 ; pixs[$1] = pixs[$1] " " $3 "," $4 ; next }
             NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { print "  cabling.txt: bad line \"" $0 "\"" ; next }
             !($2 in chans) { print "  cabling.txt: slot " $2 " is not in mapping.txt" ; next }
             ($2 in s) { print "  cabling.txt: slot " $2 " listed twice" ; next }
@@ -138,8 +139,13 @@ cmd_check() {
                   k = $1 " " c[i]
                   if (k in used) { print "  cabling.txt: packet " $1 " channel " c[i] " is in slot " used[k] " and slot " $2 ; break }
                   used[k] = $2
+              }
+              n = split(pixs[$2], p, " ")
+              for (i = 1; i <= n; i++) {
+                  if (p[i] in read) { print "  cabling.txt: pixel " p[i] " is in slot " read[p[i]] " and slot " $2 ; break }
+                  read[p[i]] = $2
               } }
-        ' <(tb_table "$f/mapping.txt" | awk '{ print $1, $2 }') <(tb_table "$f/cabling.txt" 2> /dev/null) | problems
+        ' <(tb_table "$f/mapping.txt") <(tb_table "$f/cabling.txt" 2> /dev/null) | problems
     done
     for n in $(tb_daq_names) ; do
         echo "DAQ profile $n"

@@ -11,4 +11,7 @@
 #   2000  0
 
 # 27 Oct 2026: the V1742 reads readout 0 (laser at 65, 82 mm sits on ch20 = pixel 2,5 of readout 0)
-2000  0
+# 30 Oct 2026: moved to readout 1, the lower half (rows 4-7, y 98-117 mm). Its connector went on
+# turned by 180 deg, so runs 1801-1996 (and on, until it is turned back) read slot 2 of mapping.txt,
+# the rotated readout 1. Once it is turned back: 2000 1, and note the first run.
+2000  2
