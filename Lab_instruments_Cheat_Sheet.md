@@ -41,6 +41,7 @@ DAQ profiles (`db/daq/`):
 | Profile | Window | Use |
 | --- | --- | --- |
 | `v1742_5G` | 205 ns at 5 GS/s | Laser timing (the standard) |
+| `v1742_5G_520` | 104 ns at 5 GS/s, uncompressed | Fast scans: ~1500 events/s, 27 kB/event; late pulses beyond ~55 ns after the trigger are lost |
 | `v1742_2G5` | 410 ns at 2.5 GS/s | Late pulses out to ~350 ns |
 | `v1742_1G` | 1024 ns at 1 GS/s | Afterpulses / ion feedback |
 | `mso64b` | – | The Tektronix scope, by hand for now (`setup_rcdaq.sh` refuses it) |

@@ -51,7 +51,8 @@ fi
 # one shared run-number file, so run numbers never repeat
 $RC daq_setrunnumberfile "$RUNNUMBER_FILE"
 
-$RC daq_set_compression 4
+# file compression from the DAQ profile: 0 none, 1-3 LZO (saves ~2 % on V1742 data), 4 bzip2
+$RC daq_set_compression ${COMPRESSION:-4}
 $RC daq_set_nr_threads 10
 
 # run types: junk, test, and the RUNTYPE of every detector in the db
@@ -112,6 +113,10 @@ $CC -d $LINK -n $NODE WriteRegister 0x80DC $TRIG_DC_OFFSET
 $CC -d $LINK -n $NODE WriteRegister 0x80D4 $TRIG_THRESHOLD
 
 $CC -d $LINK -n $NODE SetDRS4SamplingFrequency $FREQ_CODE
+# the post-trigger register depends on the sampling frequency: set it again now. Set only
+# before (29 Oct 2026, 520 samples), POST_TRIGGER 100 read back 250 and the trigger fell
+# outside the record; set after, it reads back 106 and the trigger is 50 ns in
+$CC -d $LINK -n $NODE SetPostTriggerSize $POST_TRIGGER
 $CC -d $LINK -n $NODE SetFastTriggerDigitizing $FAST_TRIGGER_DIGITIZING
 $CC -d $LINK -n $NODE SetFastTriggerMode 1
 # NIM pulses are negative-going: 1 = negative polarity

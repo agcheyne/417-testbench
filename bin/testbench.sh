@@ -143,7 +143,7 @@ cmd_check() {
     done
     for n in $(tb_daq_names) ; do
         echo "DAQ profile $n"
-        local READOUT= FREQ_CODE= CALIB_SPEED= RECORD_LENGTH=
+        local READOUT= FREQ_CODE= CALIB_SPEED= RECORD_LENGTH= COMPRESSION=
         tb_conf "$(tb_daq_file $n)"
         case $READOUT in
             v1742) [[ $FREQ_CODE =~ ^[012]$ ]] || err "$n: FREQ_CODE must be 0, 1 or 2"
@@ -151,7 +151,8 @@ cmd_check() {
                        err "$n: CALIB_SPEED $CALIB_SPEED does not match FREQ_CODE $FREQ_CODE"
                    ls "$CALIB_DIR"/calib_*_"$CALIB_SPEED".dat > /dev/null 2>&1 ||
                        err "$n: no calibration calib_*_$CALIB_SPEED.dat in $CALIB_DIR"
-                   [[ $RECORD_LENGTH =~ ^(1024|520|256|136)$ ]] || err "$n: RECORD_LENGTH $RECORD_LENGTH (V1742: 1024, 520, 256, 136)" ;;
+                   [[ $RECORD_LENGTH =~ ^(1024|520|256|136)$ ]] || err "$n: RECORD_LENGTH $RECORD_LENGTH (V1742: 1024, 520, 256, 136)"
+                   [[ ${COMPRESSION:-4} =~ ^[0-4]$ ]] || err "$n: COMPRESSION $COMPRESSION (rcdaq: 0 none .. 4 bzip2)" ;;
             scope) ;;
             *)     err "$n: READOUT must be v1742 or scope" ;;
         esac
