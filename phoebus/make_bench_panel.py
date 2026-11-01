@@ -376,8 +376,8 @@ button(DX + 330, DY + 26, 80, 26, 'Open', [('DAQ:CMD', 'open')], bg='head', extr
 button(DX + 330, DY + 26, 80, 26, 'Close', [('DAQ:CMD', 'close')], bg='head', extra_pvs=NOSCAN + ['DAQ:RUNNING'],
        extra_exp=' && pvStr1!="running" && pv2==0', vis=(['DAQ:LOGGING'], 'pv0==1'),
        tooltip='logging is on: runs are written. Close = daq_close (unlocked, stopped)')
-for txt, pv, x, lw, vw in [('events', 'DAQ:EVENTS', 12, 48, 92), ('rate', 'DAQ:RATE', 160, 34, 86),
-                           ('time', 'DAQ:DURATION', 286, 34, 88)]:
+for txt, pv, x, lw, vw in [('events', 'DAQ:EVENTS', 12, 46, 76), ('rate', 'DAQ:RATE', 138, 30, 74),
+                           ('avg', 'DAQ:RATE_AVG', 246, 26, 70), ('time', 'DAQ:DURATION', 346, 30, 52)]:
     label(DX + x, DY + 54, lw, 22, txt, size=10, fg='dim')
     update(DX + x + lw, DY + 54, vw, 22, pv, size=11, bold=True, align=0)
 update(DX + 12, DY + 78, DW - 24, 20, 'DAQ:FILE', size=9, fmt=6, align=0, alarm=False)
@@ -517,8 +517,14 @@ button(KX + 176, KY + 112, CW - 166, 24, 'mute alarm sound', [('N1470:MUTE', 1)]
 update(KX + 176, KY + 138, CW - 166, 18, 'N1470:MUTE', size=9, align=1, alarm=False)
 # the HV alarm log (newest first: the annunciator writes the lines in that order)
 LX0 = KX + CW + 20
-label(LX0, KY + 4, 300, 20, 'HV alarm log (newest first)', size=12, bold=True, fg='head')
-widget('textupdate', LX0, KY + 26, KX + KW - LX0 - 8, KH - 32, pv_name='N1470:ALARM_HIST', format=6, raw_f=font(9),
+label(LX0, KY + 4, 220, 20, 'HV alarm log (newest first)', size=12, bold=True, fg='head')
+# the alarm sound (any time, locked too: it switches nothing): a pick plays once, "test" plays it again
+label(KX + KW - 274, KY + 4, 44, 22, 'sound', size=10, fg='dim', align=2)
+widget('combo', KX + KW - 226, KY + 3, 150, 22, pv_name='N1470:SOUND', items_from_pv='true', raw_f=font(10),
+       tooltip='the alarm sound (bin/alarm_sounds.list); a pick plays once and is kept (state/alarm_sound)')
+button(KX + KW - 70, KY + 3, 62, 22, 'test', [('N1470:SOUND_TEST', 1)], bg='head', locked_ok=True, size=10,
+       tooltip='play the alarm sound once (muted or not)')
+widget('textupdate', LX0, KY + 28, KX + KW - LX0 - 8, KH - 34, pv_name='N1470:ALARM_HIST', format=6, raw_f=font(9),
        horizontal_alignment=0, vertical_alignment=0, wrap_words='true', border_alarm_sensitive='false',
        raw_bg=color('background_color', C['white']))
 

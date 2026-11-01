@@ -83,7 +83,9 @@ declare -A IMAX=(
 # what an alarm (or a unit that cannot be read) does besides exit 3; to try it, use test-alarm
 # (N1470_FAKE_ALARM="text" in the environment also adds a fake alarm to every unit of that check)
 # ALARM_SOUND=/usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga   # every check; empty = none
-ALARM_SOUND=/usr/share/sounds/freedesktop/stereo/dialog-warning.oga
+ALARM_SOUND=/usr/share/sounds/freedesktop/stereo/dialog-warning.oga   # unless the panel picked one:
+ALARM_SOUNDS=$(dirname "$(readlink -f "$0")")/alarm_sounds.list   # the panel's choices (N1470:SOUND)
+ALARM_SOUND_STATE=$(dirname "$(dirname "$(readlink -f "$0")")")/state/alarm_sound   # the label picked there
 ALARM_REMOTE_PULSE=tcp:127.0.0.1:24713   # also play it on this PulseAudio server (e.g. your laptop through
                                          # an ssh -R tunnel), if it answers within 1 s; empty = room only
 ALARM_VNC_POPUP=1            # also a pop-up window in every running Xvnc display; empty = off
@@ -92,6 +94,14 @@ ALARM_SPEAK=                 # 1: after the sound, say what it is ("HV alarm. Un
 ALARM_VOICE=en               #   espeak-ng voice and speed (words per minute); ALARM_SPEAK empty = no speech
 ALARM_SPEED=150
 NOTIFY_REPEAT=60             # s: repeat the notification (and reopen a closed pop-up) while the alarm stays
+# the sound of the label picked on the panel (alarm_sounds.list), if it is there and readable
+sound_of() {   # LABEL -> FILE
+    awk -v l="$1" '!/^#/ && $1 == l { print $2 ; exit }' "$ALARM_SOUNDS" 2> /dev/null
+}
+sound_labels() {   # the labels, in the order of the panel's drop-down (N1470:SOUND index)
+    awk '!/^#/ && NF { print $1 }' "$ALARM_SOUNDS" 2> /dev/null | head -n 16
+}
+_s=$(sound_of "$(cat "$ALARM_SOUND_STATE" 2> /dev/null)") && [ -r "$_s" ] && ALARM_SOUND=$_s ; unset _s
 # N1470_SILENT=1 in the environment: no sound, speech, notification or pop-up (tests of check / annunciate)
 [ -n "$N1470_SILENT" ] && ALARM_SOUND="" ALARM_REMOTE_PULSE="" ALARM_VNC_POPUP="" ALARM_SPEAK="" QUIET=1
 # desktop session of this user, so notifications and sound also work from ssh / cron
@@ -964,6 +974,39 @@ put_text() {   # PV TEXT MAX [first]
     return 1
 }
 
+# The panel's alarm sound (N1470:SOUND, its labels from alarm_sounds.list). A pick is a write, and every write
+# counts up N1470:SOUND_N; a restarted IOC starts the count at 0 (and on the saved pick, bench_choices.sh). So
+# only a count above the one we noted is a pick: it becomes ALARM_SOUND, is saved in ALARM_SOUND_STATE and plays
+# once; otherwise (an IOC restart, our first look) the IOC must show our ALARM_SOUND, and is put back if not.
+# N1470:SOUND_TEST plays it once (muted or not: it is asked for).
+SOUND_N=""
+sound_choice() {
+    local v n tst want labels f i=0 l play=""
+    read -r v n tst < <(ca caget -n -t -w 1 N1470:SOUND N1470:SOUND_N N1470:SOUND_TEST 2> /dev/null | tr '\n' ' ')
+    [ -n "$tst" ] || return
+    n=${n%.*}
+    labels=($(sound_labels))
+    want=-1
+    for l in "${labels[@]}" ; do [ "$(sound_of "$l")" == "$ALARM_SOUND" ] && { want=$i ; break ; } ; i=$((i + 1)) ; done
+    if [ -z "$SOUND_N" ] || (( n <= SOUND_N )) ; then             # no pick: the IOC shows ours (a restart may not)
+        if [ $want -ge 0 ] && [ "$v" != "$want" ] ; then
+            ca caput -c -t -w 1 N1470:SOUND $want > /dev/null 2>&1
+            n=$(ca caget -t -w 1 N1470:SOUND_N 2> /dev/null) ; n=${n%.*}
+        fi
+    elif [ "$v" != "$want" ] && f=$(sound_of "${labels[$v]}") && [ -r "$f" ] ; then
+        ALARM_SOUND=$f play=1
+        mkdir -p "$(dirname "$ALARM_SOUND_STATE")" && echo "${labels[$v]}" > "$ALARM_SOUND_STATE"
+        log_alarm UNIT "alarm sound now ${labels[$v]} ($f), picked on the panel"
+    else
+        play=1                                                    # the same one picked again: play it
+    fi
+    SOUND_N=$n
+    if [ "$tst" == 1 ] ; then
+        play=1 ; ca caput -t -w 1 N1470:SOUND_TEST 0 > /dev/null 2>&1
+    fi
+    [ -n "$play" ] && [ -z "$N1470_SILENT" ] && [ -r "$ALARM_SOUND" ] && sound_bg queue "$ALARM_SOUND"
+}
+
 annunciate() {
     local keys last_keys="" last_notify=0 last_cache=0 now txt hist last_hist="" m l u c unacked
     [ -n "$N1470_SILENT" ] || QUIET=""
@@ -979,6 +1022,7 @@ annunciate() {
         laser_alarms
         now=$(date +%s)
         [ -n "$IOC" ] && [ "$(ca caget -t -w 1 N1470:MUTE 2> /dev/null)" == muted ] && touch "$ALARM_MUTE"
+        [ -n "$IOC" ] && sound_choice
         # per-channel acknowledge (the panel's ack buttons, N1470_U:CHn:ACK): acknowledged channels do not
         # sound; an ACK ends when that channel's alarm clears
         unacked=0

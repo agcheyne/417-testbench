@@ -1,0 +1,23 @@
+# The alarm sounds the bench panel offers (N1470:SOUND, at most 16, labels at most 25 characters):
+#   LABEL  FILE
+# bin/n1470.sh annunciate plays the chosen one again and again while an alarm is neither muted nor
+# acknowledged; ~/epics/app/iocBoot/iocN1470/bench_choices.sh makes the drop-down's labels from this list
+# (an IOC restart picks up a change). The choice is kept in state/alarm_sound.
+# Not listed: dialog-error, window-attention, drip, power-unplug, network-connectivity-lost (the same
+# files as sounds here).
+dialog-warning      /usr/share/sounds/freedesktop/stereo/dialog-warning.oga
+alarm-clock         /usr/share/sounds/freedesktop/stereo/alarm-clock-elapsed.oga
+bell                /usr/share/sounds/freedesktop/stereo/bell.oga
+dialog-information  /usr/share/sounds/freedesktop/stereo/dialog-information.oga
+phone-incoming      /usr/share/sounds/freedesktop/stereo/phone-incoming-call.oga
+phone-busy          /usr/share/sounds/freedesktop/stereo/phone-outgoing-busy.oga
+message-new         /usr/share/sounds/freedesktop/stereo/message-new-instant.oga
+suspend-error       /usr/share/sounds/freedesktop/stereo/suspend-error.oga
+device-removed      /usr/share/sounds/freedesktop/stereo/device-removed.oga
+complete            /usr/share/sounds/freedesktop/stereo/complete.oga
+test-signal         /usr/share/sounds/freedesktop/stereo/audio-test-signal.oga
+service-logout      /usr/share/sounds/freedesktop/stereo/service-logout.oga
+sonar               /usr/share/sounds/gnome/default/alerts/sonar.ogg
+glass               /usr/share/sounds/gnome/default/alerts/glass.ogg
+bark                /usr/share/sounds/gnome/default/alerts/bark.ogg
+trumpet             /usr/share/sounds/speech-dispatcher/trumpet-12.wav

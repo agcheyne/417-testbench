@@ -149,13 +149,14 @@ watch -c -n 5 "$PWD/bin/n1470.sh -u all check --color"
 - **Test a channel's alarm:** the panel's `test` on that row (unlocked): a MAJOR test alarm for 30 s through the whole chain (banner, log, sound, pop-ups). `bin/n1470.sh test-alarm` still tests the outputs without the HV.
 - **Only the detector's channels can be switched on:** a channel needs a row with unit and channel in the active detector's `hv.conf` (`testbench.sh use detector`); `n1470.sh on`, the panel's ON / "ON selected" and the IOC refuse all others (OFF always works). To use another channel, add its row to `hv.conf` (the IOC picks it up within 30 s). To keep a channel off in hardware, set its front-panel switch to OFF (status DIS) or KILL: the supply then refuses ON whatever the software does; HV_EN to use it again.
 - **Switch several channels at once:** tick their `sel` boxes in the panel, then "ON selected" (unlocked and HV box-safe armed) or "OFF selected"; "clear" un-ticks all. The ticks are shared by every window.
-- **Spoken alarm:** after the sound, `espeak-ng` says what is wrong (unit, channel or electrode, fault; the first two problems, then "and N more"). Turn it off with `ALARM_SPEAK=` (empty); voice and speed are `ALARM_VOICE` / `ALARM_SPEED`.
+- **Pick the alarm sound:** the "sound" drop-down above the panel's HV alarm log (locked too): a pick plays once and is kept (`state/alarm_sound`, also over IOC and annunciator restarts); `test` plays it again, muted or not. The 16 choices are `bin/alarm_sounds.list` (label and file; edit it, then restart `ioc-n1470` for the drop-down's labels).
+- **Spoken alarm:** off (`ALARM_SPEAK=` empty in `bin/n1470.sh`). With `ALARM_SPEAK=1`, `espeak-ng` says what is wrong after the sound (unit, channel or electrode, fault); voice and speed are `ALARM_VOICE` / `ALARM_SPEED`.
 - **Test the alarms:** `bin/n1470.sh test-alarm` fires every output once (warn the room first; `--quiet` skips the sound) and reports which outputs worked. It affects only that one command: no HV access, and a running `watch` monitor is untouched.
 - **Is the annunciator running?** `systemctl --user status hv-annunciator`; the panel's "annunciator" lamp is green and its banner grey when it is down. Any number of `watch` windows is fine: they only show.
 - **Units switched off or unplugged** while their HV is off are not an alarm (one log line). A unit that disappears, or can't be read, while its HV is on IS an alarm; a port held by GECO2020 only becomes one after 5 min (`BUSY_GRACE`).
 - **Logs** (in `logs/`; until the switch-over in the README, the timer still runs `~/hpDIRC/n1470.sh` and logs to `~/hpDIRC/logs/`): `hv_alarms.log` gets one line per alarm start/change/clear, HV on/off, and unit present/absent/busy; `hv_history_YYYYMMDD.csv` gets every channel once a minute, only while the HV is in use (any channel on, ramping, or VMON > 10 V). Idle days write nothing. Read with `tail -f logs/hv_alarms.log`.
 - **Pause / resume the alarms:** `systemctl --user stop hv-annunciator` / `start`. Without the IOCs (e.g. both stopped for GECO2020), the old timer still works: `systemctl --user enable --now n1470-check.timer`.
-- **Settings** (sound file, remote audio address, pop-ups, repeat time, `HV_ON_VMON`, `BUSY_GRACE`, `HISTORY_EVERY`) are at the top of `bin/n1470.sh`.
+- **Settings** (default sound file when none is picked, remote audio address, pop-ups, repeat time, `HV_ON_VMON`, `BUSY_GRACE`, `HISTORY_EVERY`) are at the top of `bin/n1470.sh`.
 
 ### Alarm sound on your remote desktop (audio tunnel)
 
@@ -199,7 +200,8 @@ If the tunnel is down, the alarm just skips that output; the room speaker and po
 
 The two stepper axes (APT controller s/n 70810396) are driven by `~/v1/thor_epics`, which talks to the controller over USB and serves the EPICS PVs of the `iocThorLabs` IOC. Both have to be running before anything can move or be read.
 
-**From the bench panel:** click a pad on the detector face to move the laser to its centre (unlocked), or use the
+**From the bench panel:** the face is drawn as the stage sees it: x to the right, y down, (0, 0) at the top left (as
+in all our maps and plots). Click a pad to move the laser to its centre (unlocked), or use the
 "Move the laser (XY stage)" box under the face: x, y
 and Move, jogs X−/X+/Y−/Y+ by the step, Home, and STOP (STOP works locked too; the rest needs the unlock). It runs
 `motor.sh` (same limits), and refuses during a scan, while a run is going, or while a move is still running;
@@ -406,6 +408,7 @@ Limits (`MONO_MIN`/`MONO_MAX`, 200–750 nm: the H20 UV's specified range), step
 | Power meter reads exactly `+0.0000E+00` everywhere | OD3 attenuator cap on the detector (28–29 Oct); no light (lamp fibre unplugged); or zero off with the dark below 0 | Take the cap off (or `PM:ATT 1` if it should be on); check the fibre at the lamp and the sphere; dark the detector and `PM:ZERO 1` |
 | Monochromator ends short of its target; its counter disagrees with `monochromator.sh pos` | Drive jamming (29 Oct: motor heard jamming, wheel sticking; long downward moves lost 1–30 % of their steps) | Unscrew the back plate, oil the drive thread and the counter mechanism; then `monochromator.sh set NM` from the counter. `MONO_SPEED` was halved meanwhile: once moves land again it can go back to `300,450,1000` |
 | Power meter `cannot claim USB interface` | Another program has the meter (a `watch` in another terminal) | Stop it: only one program at a time |
+| Phoebus console: `Connection to node -1 could not be established. Broker may not be available.` every second | Phoebus' own alarm Annunciator / Alarm Tree tab is open: it wants a Kafka alarm server, which we don't run | Close that tab (it comes back with the window layout otherwise); `bench.ini` hides those menu entries. Our alarms are the IOC records + `hv-annunciator` |
 | No alarm sound on the remote desktop | Audio tunnel not up | `ss -ltn \| grep 24713` on the lab PC; check `RemoteForward 24713 127.0.0.1:4713` in `~/.ssh/config` and reconnect `ssh <lab-pc>` |
 | HV or laser packet says FAILED | Port busy or device off at begin-run | Close the GUI or switch the device on; the run itself is unaffected |
 | `motor.sh: no answer from EPICS PV` | IOC not running | `systemctl --user restart ioc-thorlabs` |

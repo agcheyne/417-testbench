@@ -60,22 +60,30 @@ daq() {
     rt=$(timeout 5 $RC daq_get_runtype 2> /dev/null | head -n 1)
     put DAQ:LOGGING "$open"
     put DAQ:RUNTYPE "${rt:--}"
-    if [ -n "$RUNTYPES" ] && [ "$LAST_SP" != -2 ] && [ "$(idx "$rt" "${RUNTYPES[@]}")" != "$LAST_SP" ] ; then
-        LAST_SP=$(idx "$rt" "${RUNTYPES[@]}") ; put DAQ:RUNTYPE_SP "$LAST_SP"      # changed outside the panel
-    fi
+    [ -n "$RUNTYPES" ] && [ "$(ca caget -n -t -w 1 DAQ:RUNTYPE_SP 2> /dev/null)" != "$(idx "$rt" "${RUNTYPES[@]}")" ] &&
+        rt_sync                                                    # changed outside the panel
     if [ "$r" == -1 ] ; then                     # stopped: the last run and its file
         put DAQ:RUNNING 0
         file=$(timeout 5 $RC daq_get_lastfilename 2> /dev/null | head -n 1)
         [[ $file =~ -0*([0-9]+)-[0-9]+\.evt$ ]] && put DAQ:RUN "${BASH_REMATCH[1]}"
         puts DAQ:FILE "${file:+last: }$file"
-        put DAQ:EVENTS 0 ; put DAQ:RATE 0 ; put DAQ:DURATION 0
+        put DAQ:EVENTS 0 ; put DAQ:RATE 0 ; put DAQ:RATE_AVG 0 ; put DAQ:DURATION 0
+        LAST_RUN= LAST_EV= LAST_T=
         return
     fi
     put DAQ:RUNNING 1
     put DAQ:RUN "$r"
     put DAQ:EVENTS "$n"
     put DAQ:DURATION "$dur"
-    put DAQ:RATE "$(awk -v n="$n" -v t="$dur" 'BEGIN { print (t > 0 ? n / t : 0) }')"
+    # instantaneous: events since the last look ~2 s ago; average: events / run time
+    local now ; now=$(date +%s.%N)
+    if [ "$r" == "$LAST_RUN" ] && [ -n "$LAST_T" ] ; then
+        put DAQ:RATE "$(awk -v a="$n" -v b="$LAST_EV" -v t="$now" -v u="$LAST_T" 'BEGIN { print (t > u ? (a - b) / (t - u) : 0) }')"
+    else
+        put DAQ:RATE "$(awk -v n="$n" -v t="$dur" 'BEGIN { print (t > 0 ? n / t : 0) }')"      # first look at this run
+    fi
+    LAST_RUN=$r LAST_EV=$n LAST_T=$now
+    put DAQ:RATE_AVG "$(awk -v n="$n" -v t="$dur" 'BEGIN { print (t > 0 ? n / t : 0) }')"
     puts DAQ:FILE "$file"
 }
 
@@ -137,21 +145,33 @@ ioc_up() { ca caget -t -w 2 BENCH:PUB_ALIVE > /dev/null 2>&1 ; }
 
 idx() { local w=$1 i=0 x ; shift ; for x ; do [ "$x" == "$w" ] && { echo $i ; return ; } ; i=$((i + 1)) ; done ; echo -1 ; }
 
+# an mbbo's labels, written only when they differ from the IOC's (its start-up labels, bench_choices.sh, are
+# normally the same): a label write processes the record, and for DAQ:RUNTYPE_SP counts up DAQ:RUNTYPE_N, so
+# the count is noted again after it (a label write is not a pick)
+labels() {   # RECORD LABEL...
+    local rec=$1 i have want ; shift
+    have=$(ca caget -t -w 1 $(for i in "${MBBO_STATES[@]}" ; do echo $rec.$i ; done) 2> /dev/null | tr '\n' '|')
+    want=$(for i in "${!MBBO_STATES[@]}" ; do echo "${@:$((i + 1)):1}" ; done | tr '\n' '|')
+    [ "$have" == "$want" ] && return
+    for i in "${!MBBO_STATES[@]}" ; do put $rec.${MBBO_STATES[$i]} "${@:$((i + 1)):1}" ; done
+    [ "$rec" == DAQ:RUNTYPE_SP ] && [ -n "$LAST_N" ] && { LAST_N=$(ca caget -t -w 1 DAQ:RUNTYPE_N 2> /dev/null) ; LAST_N=${LAST_N%.*} ; }
+}
+
 # the choices of the combos, and the pickers set to what is active now
 choices_init() {
     local i
-    RUNTYPES=($(timeout 5 $RC daq_list_runtypes -s 2> /dev/null))
+    # the run types daq/setup_rcdaq.sh defines (junk, test, every detector's RUNTYPE), in rcdaq's order: from the
+    # db, so a stopped rcdaq leaves no empty choices; the same lists as the IOC's start-up labels (bench_choices.sh)
+    RUNTYPES=($( { for i in $(tb_detector_names) ; do RUNTYPE= ; tb_conf "$(tb_detector_dir $i)/detector.conf" ; echo $RUNTYPE ; done
+                   echo junk ; echo test ; } | LC_ALL=C sort -u ))
     DETS=($(tb_detector_names))
     PROFS=() ; for i in $(tb_daq_names) ; do grep -q '^READOUT=v1742' "$(tb_daq_file $i)" && PROFS+=($i) ; done
-    for i in "${!MBBO_STATES[@]}" ; do
-        put DAQ:RUNTYPE_SP.${MBBO_STATES[$i]} "${RUNTYPES[$i]}"
-        put DAQ:SETUP_DET.${MBBO_STATES[$i]} "${DETS[$i]}"
-        put DAQ:SETUP_DAQ.${MBBO_STATES[$i]} "${PROFS[$i]}"
-    done
+    labels DAQ:RUNTYPE_SP "${RUNTYPES[@]}"
+    labels DAQ:SETUP_DET "${DETS[@]}"
+    labels DAQ:SETUP_DAQ "${PROFS[@]}"
     active
     put DAQ:SETUP_DET "$(idx "$ACTIVE_DET" "${DETS[@]}")"
     put DAQ:SETUP_DAQ "$(idx "$ACTIVE_DAQ" "${PROFS[@]}")"
-    LAST_SP=-2                             # sync DAQ:RUNTYPE_SP with the next status
 }
 
 active() {
@@ -211,15 +231,29 @@ apply_done() {   # the background apply has finished: report it
     active ; choices_init ; daq
 }
 
-# the run type picked in the panel: set it when allowed, else put the combo back
+# The run type picked in the panel. A pick is a write to DAQ:RUNTYPE_SP, which counts up DAQ:RUNTYPE_N; a
+# restarted IOC starts the count at 0. So only a count above the one noted after our own last write is a
+# pick; a lower one is a restart (1 Nov 2026: judged by the combo's value, two restarts set rcdaq to HRPPD).
+
+rt_sync() {   # the combo on rcdaq's actual run type; note the count after this (our own) write
+    local rt i
+    rt=$(timeout 5 $RC daq_get_runtype 2> /dev/null | head -n 1)
+    i=$(idx "$rt" "${RUNTYPES[@]}")
+    [ "$i" -ge 0 ] && [ "$(ca caget -n -t -w 1 DAQ:RUNTYPE_SP 2> /dev/null)" != "$i" ] &&
+        ca caput -c -t -w 2 DAQ:RUNTYPE_SP "$i" > /dev/null 2>&1
+    put DAQ:RUNTYPE "${rt:--}"
+    LAST_N=$(ca caget -t -w 1 DAQ:RUNTYPE_N 2> /dev/null) ; LAST_N=${LAST_N%.*}
+}
+
 runtype_poll() {
-    local sp want st run rt
-    sp=$(ca caget -n -t -w 1 DAQ:RUNTYPE_SP 2> /dev/null) || return
-    [ "$sp" == "$LAST_SP" ] && return
-    if [ "$LAST_SP" == -2 ] ; then LAST_SP=$sp ; return ; fi      # first look: no request yet
-    want=${RUNTYPES[$sp]}
-    LAST_SP=$sp
-    if [ -e "$APPLY_OUT" ] ; then msg "run type refused: the setup is still being applied"
+    local n sp want st run out
+    n=$(ca caget -t -w 1 DAQ:RUNTYPE_N 2> /dev/null) || return
+    n=${n%.*}
+    [ "$n" == "$LAST_N" ] && return
+    if [ -z "$LAST_N" ] || (( n < LAST_N )) ; then rt_sync ; return ; fi      # an IOC restart, not a pick
+    sp=$(ca caget -n -t -w 1 DAQ:RUNTYPE_SP 2> /dev/null) want=${RUNTYPES[$sp]}
+    if [ -z "$want" ] ; then msg "run type: no such choice ($sp)"
+    elif [ -e "$APPLY_OUT" ] ; then msg "run type refused: the setup is still being applied"
     elif scan_busy ; then msg "run type refused: a scan is running"
     elif ! st=$(timeout 5 $RC daq_status -s 2> /dev/null) ; then msg "run type refused: no rcdaq_server"
     else
@@ -228,8 +262,7 @@ runtype_poll() {
         elif out=$(timeout 10 $RC daq_set_runtype "$want" 2>&1) ; then msg "run type: $want" "$out"
         else msg "run type $want FAILED: $(tail -n 1 <<< "$out")" "$out" ; fi
     fi
-    rt=$(timeout 5 $RC daq_get_runtype 2> /dev/null | head -n 1)
-    LAST_SP=$(idx "$rt" "${RUNTYPES[@]}") ; put DAQ:RUNTYPE_SP "$LAST_SP" ; put DAQ:RUNTYPE "${rt:--}"
+    rt_sync
 }
 
 # ---- the panel's stage commands ----
@@ -294,6 +327,9 @@ stage_done() {
 cmd_poll() {
     local c
     stage_done
+    # an IOC that has (re)started and not been set up yet holds start values, not requests: act on nothing
+    # until the main loop has set it up (1 Nov 2026: the run-type combo's start value 0 set rcdaq to HRPPD)
+    [ "$(ca caget -n -t -w 1 BENCH:PUB_INIT 2> /dev/null)" == 1 ] || return
     [ "$(ca caget -n -t -w 1 STAGE:STOP 2> /dev/null)" == 1 ] && { put STAGE:STOP 0 ; stage_cmd stop ; }
     c=$(ca caget -t -w 1 STAGE:CMD 2> /dev/null) && [ -n "$c" ] && { put STAGE:CMD "" ; stage_cmd "$c" ; }
     apply_done
@@ -316,10 +352,13 @@ next_config=0
 rm -f "$APPLY_OUT" "$APPLY_OUT.rc" "$STAGE_OUT" "$STAGE_OUT.rc" "$STAGE_OUT.stopped"   # cut off by a restart
 while : ; do
     if ioc_up ; then
-        if [ $next_config -eq 0 ] ; then
+        # set up a (re)started IOC: BENCH:PUB_INIT is 0 after every IOC start, not only after one this loop
+        # happened to see as an outage (1 Nov 2026: a missed restart set rcdaq's run type to HRPPD)
+        if [ "$(ca caget -n -t -w 2 BENCH:PUB_INIT 2> /dev/null)" != 1 ] ; then
             scan_init ; choices_init ; stage_init ; put DAQ:BUSY 0 ; put DAQ:CMD ""
-            put DAQ:RUNTYPE_SP "$(idx "$(timeout 5 $RC daq_get_runtype 2> /dev/null | head -n 1)" "${RUNTYPES[@]}")"
-            LAST_SP=$(ca caget -n -t -w 2 DAQ:RUNTYPE_SP 2> /dev/null)
+            rt_sync
+            next_config=0
+            put BENCH:PUB_INIT 1
         fi
         daq
         scan

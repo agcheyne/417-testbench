@@ -15,7 +15,8 @@ yellow. Two sizes:
 
 Generated from the db (detector.conf: NROWS, NCOLS, PITCH_X/Y_MM, STAGE_X0/Y0_MM, STAGE_X/Y_DIR;
 mapping.txt; cabling.txt; MASKED_CHANNELS in testbench.conf): run it again after a db change (a new
-offset, recabling). Stage x to the right, stage y up, as in the gain maps.
+offset, recabling). Stage x to the right, stage y DOWN: (0, 0) at the top left, as in the gain maps and all
+the plots so far (user, 1 Nov 2026; it was drawn y up before).
 """
 import os
 import re
@@ -138,7 +139,7 @@ def gen(det):
         out, n = [], [0]
 
         def sx(x): return LEFT + (x - xmin) * PX
-        def sy(y): return TOP + (ymax - y) * PX
+        def sy(y): return TOP + (y - ymin) * PX          # y down: the smallest y at the top
 
         def widget(wtype, x, y, w, h, version='2.0.0', **props):
             n[0] += 1
@@ -170,7 +171,7 @@ def gen(det):
             warn = (LEFT + 6, TOP + 4, 200, 18, 10)
         else:
             label(10, 6, W - 20, 26, '%s face, laser position (live)' % det, size=15, bold=True, align=0)
-            label(10, 32, W - 20, 18, 'stage x to the right, stage y up; pad (0,0) at %.1f, %.1f mm, pitch %.1f mm (db)'
+            label(10, 32, W - 20, 18, 'stage x to the right, stage y down; pad (0,0) at %.1f, %.1f mm, pitch %.1f mm (db)'
                   % (x0, y0, px), size=10, color=(110, 110, 110), align=0)
             label(10, 56, 70, 22, 'laser x, y', size=11, color=(110, 110, 110), align=0)
             for i, pv in enumerate([LX, LY]):
@@ -220,7 +221,7 @@ def gen(det):
                                                                ' (masked)' if inp in masked and slot in cabled else '',
                                                                ' (cabled now)' if slot in cabled else '')
                 under = 'pv0>=%.2f && pv0<%.2f && pv1>=%.2f && pv1<%.2f' % (lo_x, hi_x, lo_y, hi_y)
-                widget('rectangle', sx(lo_x + GAP / 2), sy(hi_y - GAP / 2), (px - GAP) * PX, (py - GAP) * PX,
+                widget('rectangle', sx(lo_x + GAP / 2), sy(lo_y + GAP / 2), (px - GAP) * PX, (py - GAP) * PX,
                        raw_bg='<background_color>%s</background_color>' % col(CAB if slot in cabled else OTHER),
                        raw_lc='<line_color>%s</line_color>' % col((150, 160, 175) if slot in cabled else (190, 190, 190)),
                        line_width=1, corner_width=3, corner_height=3, tooltip=tip,
@@ -246,7 +247,7 @@ def gen(det):
         # (they need the panel's lock, loc://unlocked$(DID), which an embedded display cannot be given)
         if small:
             import json
-            json.dump([dict(row=r_, col=c_, x=round(sx(cx(c_) - px / 2)), y=round(sy(cy(r_) + py / 2)),
+            json.dump([dict(row=r_, col=c_, x=round(sx(cx(c_) - px / 2)), y=round(sy(cy(r_) - py / 2)),
                             w=round(px * PX), h=round(py * PX), cx=round(cx(c_), 2), cy=round(cy(r_), 2))
                        for r_ in range(nrows) for c_ in range(ncols)],
                       open(os.path.join(HERE, 'laser_face_pads_%s.json' % det), 'w'))
@@ -254,11 +255,11 @@ def gen(det):
         # the laser: a red ring with a white edge and a dot, centred on the stage position, hidden off the area
         R = 7 if small else 9
         for rad, rgb, lw, fill in [(R + 2, (255, 255, 255), 2, False), (R, (220, 0, 0), 3, False), (2, (220, 0, 0), 1, True)]:
-            widget('ellipse', sx(xmin) - rad, sy(ymax) - rad, 2 * rad, 2 * rad, line_width=lw,
+            widget('ellipse', sx(xmin) - rad, sy(ymin) - rad, 2 * rad, 2 * rad, line_width=lw,
                    raw_lc='<line_color>%s</line_color>' % col(rgb), transparent='false' if fill else 'true',
                    raw_bg='<background_color>%s</background_color>' % col(rgb), visible='false',
                    raw_r='<rules>' + rule('x', 'x', [LX], [('true', '%.2f + (pv0 - %.3f) * %.2f' % (LEFT - rad, xmin, PX))], True)
-                   + rule('y', 'y', [LY], [('true', '%.2f + (%.3f - pv0) * %.2f' % (TOP - rad, ymax, PX))], True)
+                   + rule('y', 'y', [LY], [('true', '%.2f + (pv0 - %.3f) * %.2f' % (TOP - rad, ymin, PX))], True)
                    + rule('vis', 'visible', [LX, LY], [(in_area, 'true')]) + '</rules>')
 
         # legend

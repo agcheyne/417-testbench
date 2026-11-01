@@ -253,3 +253,38 @@ no speech; switching several channels at once; disabling channels (asked back, b
   grey on unused rows. OFF is never blocked. Tested on the fake (used ch0 ON; unused ch1 nothing; SEL ch0+ch1
   -> only ch0; ALL:ON nothing; n1470.sh on 1 refused, on 0 works), then live: only A ch0 (divider) usable.
   DIS / KILL are the front-panel HV_EN / OFF / KILL switch (not remote): the hardware way to keep a channel off.
+
+## Restart-proof panel, y-down face, rate, alarm sound picker (1 Nov 2026, 19:00-20:05)
+
+User: "its still not right -- the readout is type "3" setup "0,0" -- lets get that reliable / lots of pink things,
+laser clicking doesnt work / the event rate, is that just events/time? / the laser map also needs inverted in Y /
+is there also a place we can select the alarm sound?"
+
+- Cause of the numbers, the pink and the dead clicks: after the 18:23 IOC restart the (old) publisher never set
+  the IOC up again, so the combos had no labels, many records were UDF INVALID and DAQ:ACTIVE_DET was empty (no
+  face, no pads). Now:
+  - `BENCH:PUB_INIT` (bo, 0 at every IOC start): the publisher sets up any IOC that shows 0, then writes 1; its
+    command handling waits for 1.
+  - Run-type picks are counted: every write to `DAQ:RUNTYPE_SP` counts up `DAQ:RUNTYPE_N` (FLNK calc); a
+    restarted IOC starts at 0, so only a count above the publisher's own is a pick (judging by the combo's value,
+    restarts twice set rcdaq to HRPPD). The publisher writes combo labels only when they differ (a label write
+    processes the mbbo and so counted as a pick).
+  - Start values from `iocBoot/iocN1470/bench_choices.sh` (run_ioc.sh): the labels and rcdaq's run type now
+    (`RTSP`), the active detector and profile (`DETSP`, `DAQSP`, `ACTDET`, `ACTDAQ`), the saved sound (`SNDSP`).
+    One EPICS macro value holds at most 256 characters (MAC_SIZE): the list is split into `BENCH_C1..8`.
+  - `UDFS NO_ALARM` on every record the publisher / annunciator fill: a restarted IOC shows them empty, not pink.
+  - Also restored: the stage section of bench_publisher.sh, lost in an earlier edit today (stage_done etc.).
+- Face: y down, (0, 0) at the top left (`make_laser_face.py`: sy(), pad tops, click centres, laser marker).
+- Rate: `DAQ:RATE` is now instantaneous (events since the last look, ~2 s), `DAQ:RATE_AVG` = events / run time.
+- Alarm sound: `bin/alarm_sounds.list` (16 label + file; duplicates by symlink left out), `N1470:SOUND` (mbbo,
+  labels SND0..15) with its own write counter `N1470:SOUND_N`, `N1470:SOUND_TEST`. The annunciator: a pick
+  becomes ALARM_SOUND, is saved in `state/alarm_sound` and plays once; otherwise the IOC must show ours (put back
+  after a restart). Panel: "sound" drop-down and `test` above the HV alarm log (locked too).
+- `bench.ini` hides Phoebus' own alarm apps (Annunciator, Alarm Tree/Table/Area/Log): an open Annunciator tab
+  retried Kafka at localhost:9092 every second in the console.
+- Tested on the fakes: 3+2 IOC restarts (rcdaq type unchanged, no run-type command, combo right from the first
+  0.5 s, labels complete); sound pick / same pick / test / restart with right and wrong start value; an alarm
+  repeats the picked sound (4 x glass in 10 s), none after ack; Phoebus on Xvfb 2 s after a restart: no pink;
+  unlocked click on R1 ch17 -> `move 32.6 96.9`. Then live 20:02 (HV off, rcdaq stopped on photonis): ioc-n1470
+  restarted with the publisher stopped, then bench-publisher and hv-annunciator; rcdaq still photonis, nothing
+  INVALID, labels complete.
