@@ -60,8 +60,11 @@ daq() {
     rt=$(timeout 5 $RC daq_get_runtype 2> /dev/null | head -n 1)
     put DAQ:LOGGING "$open"
     put DAQ:RUNTYPE "${rt:--}"
-    [ -n "$RUNTYPES" ] && [ "$(ca caget -n -t -w 1 DAQ:RUNTYPE_SP 2> /dev/null)" != "$(idx "$rt" "${RUNTYPES[@]}")" ] &&
-        rt_sync                                                    # changed outside the panel
+    # changed outside the panel: the combo follows rcdaq, unless a pick is waiting for runtype_poll (the count
+    # moved: syncing first would undo the pick)
+    local n ; n=$(ca caget -t -w 1 DAQ:RUNTYPE_N 2> /dev/null) ; n=${n%.*}
+    [ -n "$RUNTYPES" ] && [ "$n" == "$LAST_N" ] &&
+        [ "$(ca caget -n -t -w 1 DAQ:RUNTYPE_SP 2> /dev/null)" != "$(idx "$rt" "${RUNTYPES[@]}")" ] && rt_sync
     if [ "$r" == -1 ] ; then                     # stopped: the last run and its file
         put DAQ:RUNNING 0
         file=$(timeout 5 $RC daq_get_lastfilename 2> /dev/null | head -n 1)
@@ -73,6 +76,7 @@ daq() {
     fi
     put DAQ:RUNNING 1
     put DAQ:RUN "$r"
+    (( r > SEEN_RUN )) && SEEN_RUN=$r                     # for cabling_set: runs without a file count too
     put DAQ:EVENTS "$n"
     put DAQ:DURATION "$dur"
     # instantaneous: events since the last look ~2 s ago; average: events / run time
@@ -175,11 +179,78 @@ choices_init() {
 }
 
 active() {
-    local DETECTOR= DAQ=
+    local DETECTOR= DAQ= s
     [ -r "$TB_STATE/active.conf" ] && tb_conf "$TB_STATE/active.conf"
     ACTIVE_DET=$DETECTOR ACTIVE_DAQ=$DAQ
     put DAQ:ACTIVE_DET "${DETECTOR:--}"
     put DAQ:ACTIVE_DAQ "${DAQ:--}"
+    s=$(tb_table "$(cabling_file)" 2> /dev/null | awk 'NR == 1 { print $2 }')
+    put DAQ:CABLED "$( [ -n "$s" ] && slot_names "$ACTIVE_DET" | awk -v s="$s" '$1 == s { $1 = "" ; print substr($0, 2) }')"
+}
+
+# ---- which readout (mapping.txt slot) the V1742 reads: the active detector's cabling.txt ----
+
+cabling_file() { echo "${BENCH_TEST_DB:-$TB_DB}/detectors/$ACTIVE_DET/cabling.txt" ; }   # (BENCH_TEST_DB: a test copy)
+
+slot_names() {   # DET: "SLOT NAME" for every slot of its mapping.txt (names: SLOT_NAMES in detector.conf)
+    local d=${BENCH_TEST_DB:-$TB_DB}/detectors/$1 SLOT_NAMES= s n
+    [ -n "$1" ] && [ -r "$d/mapping.txt" ] || return
+    tb_conf "$d/detector.conf"
+    for s in $(tb_table "$d/mapping.txt" | awk '{ print $1 }' | sort -nu) ; do
+        n=$(tr ';' '\n' <<< "$SLOT_NAMES" | sed -n "s/^ *$s *= *//p" | head -n 1)
+        echo "$s ${n:-slot $s}"
+    done
+}
+
+# the next run's number: the highest of rcdaq's last file, a run seen going, the panel's begin/end lines in the
+# command log, the run-number file and the newest file on disk (a run without logging leaves no file; after an
+# rcdaq restart there is no last file)
+next_run() {
+    local RUNNUMBER_FILE= DATA_ROOT= f n=0 m
+    tb_site 2> /dev/null
+    f=$(timeout 5 $RC daq_get_lastfilename 2> /dev/null | head -n 1)
+    for m in "$( [[ $f =~ -0*([0-9]+)-[0-9]+\.evt$ ]] && echo "${BASH_REMATCH[1]}")" "$SEEN_RUN" \
+             "$(tail -n 2000 "$CMD_LOG" 2> /dev/null | sed -n 's/.* Run \([0-9][0-9]*\) \(started\|ended\).*/\1/p' | sort -n | tail -n 1)" \
+             "$(cat "$RUNNUMBER_FILE" 2> /dev/null)" \
+             "$( [ -n "$DATA_ROOT" ] && find "$DATA_ROOT" -maxdepth 2 -name '*.evt' -mtime -14 -printf '%f\n' 2> /dev/null |
+                 sed -n 's/.*-0*\([0-9][0-9]*\)-[0-9]*\.evt$/\1/p' | sort -n | tail -n 1)" ; do
+        [[ $m =~ ^[0-9]+$ ]] && (( m > n )) && n=$m
+    done
+    [ $n -gt 0 ] && echo $((n + 1))
+}
+
+# the panel's "cabled" buttons (do_cmd "cabling SLOT", so rcdaq is stopped): cabling.txt reads SLOT from the
+# next run on. The old line stays as a comment with a dated note; then testbench.sh check and the faces
+cabling_set() {   # SLOT
+    local s=$1 f name cur pk last next out
+    [ -n "$ACTIVE_DET" ] || { msg "cabling refused: no active detector" ; return ; }
+    f=$(cabling_file)
+    name=$(slot_names "$ACTIVE_DET" | awk -v s="$s" '$1 == s { $1 = "" ; print substr($0, 2) }')
+    [ -n "$name" ] || { msg "cabling refused: $ACTIVE_DET has no slot $s in mapping.txt" ; return ; }
+    cur=$(tb_table "$f" 2> /dev/null | awk 'NR == 1 { print $2 }')
+    [ "$cur" == "$s" ] && { msg "cabling: $ACTIVE_DET already reads $name (slot $s)" ; put DAQ:CABLED "$name" ; return ; }
+    pk=$(tb_table "$f" 2> /dev/null | awk 'NR == 1 { print $1 }') ; pk=${pk:-2000}
+    next=$(next_run)
+    # a panel change with no run since (its note says the same "from run"): replace it, not stack on it; back to
+    # what was there before it: drop it
+    local prev
+    prev=$(grep -v '^[[:space:]]*$' "$f" | tail -n 3 | head -n 2 | tr '\n' '|')
+    if [ -n "$next" ] && [[ $prev =~ ^#\ +[0-9]+\ +([0-9]+)\ +\(replaced\ below\)\|#.*\(bench\ panel\):.*from\ run\ $next\ on ]] ; then
+        cur=${BASH_REMATCH[1]}
+        awk -v n="$(grep -c . "$f")" 'NF { k++ } !(NF && k > n - 3)' "$f" > "$f.new" && mv "$f.new" "$f"
+        printf '%s  %s\n' "$pk" "$cur" >> "$f"
+    fi
+    if [ "$cur" != "$s" ] ; then
+        { awk '/^[[:space:]]*(#|$)/ { print ; next } { print "# " $0 "    (replaced below)" }' "$f" 2> /dev/null
+          echo "# $(date '+%Y-%m-%d %H:%M') (bench panel): $name, slot $s, from run ${next:-?} on${cur:+ (was slot $cur)}"
+          printf '%s  %s\n' "$pk" "$s" ; } > "$f.new" && mv "$f.new" "$f" ||
+            { msg "cabling FAILED: cannot write $f" ; rm -f "$f.new" ; return ; }
+    fi
+    out=$( { [ -z "$BENCH_TEST_DB" ] && "$TB_ROOT/bin/testbench.sh" check
+             $DRY python3 "$TB_ROOT/phoebus/make_laser_face.py" ; } 2>&1 )
+    put DAQ:CABLED "$name"
+    put DAQ:ACTIVE_DET - ; sleep 1 ; put DAQ:ACTIVE_DET "$ACTIVE_DET"   # open panels load the new face (file changes)
+    msg "cabling: $ACTIVE_DET reads $name (slot $s, packet $pk) from run ${next:-?} on; cabling.txt and the faces updated" "$out"
 }
 
 msg() {   # TEXT [FULL OUTPUT]: to the panel and the command log
@@ -189,9 +260,9 @@ msg() {   # TEXT [FULL OUTPUT]: to the panel and the command log
 
 scan_busy() { [ -r "$POINT_FILE" ] || pgrep -f 'bin/scan_(xy|hv)\.sh' > /dev/null ; }
 
-do_cmd() {   # begin|end|open|close|apply
+do_cmd() {   # begin|end|open|close|apply|cabling SLOT
     local c=$1 st run open out rc det prof
-    case $c in begin|end|open|close|apply) ;; *) msg "unknown command '$c'" ; return ;; esac
+    case $c in begin|end|open|close|apply|cabling\ [0-9]|cabling\ [0-9][0-9]) ;; *) msg "unknown command '$c'" ; return ;; esac
     [ -e "$APPLY_OUT" ] && { msg "$c refused: the setup is still being applied" ; return ; }
     scan_busy && { msg "$c refused: a scan is running (scan_xy.sh / scan_hv.sh drive the DAQ themselves)" ; return ; }
     st=$(timeout 5 $RC daq_status -s 2> /dev/null) || { msg "$c refused: no rcdaq_server (start it with daq/setup_rcdaq.sh)" ; return ; }
@@ -201,6 +272,7 @@ do_cmd() {   # begin|end|open|close|apply
         end)   [ "$run" != -1 ] || { msg "end: no run is going" ; return ; } ;;
         *)     [ "$run" == -1 ] || { msg "$c refused: run $run is going (end it first)" ; return ; } ;;
     esac
+    [[ $c == cabling\ * ]] && { cabling_set "${c#cabling }" ; return ; }
     if [ $c == apply ] ; then
         det=${DETS[$(ca caget -n -t -w 2 DAQ:SETUP_DET)]} prof=${PROFS[$(ca caget -n -t -w 2 DAQ:SETUP_DAQ)]}
         [ -n "$det" ] && [ -n "$prof" ] || { msg "apply refused: pick a detector and a DAQ profile" ; return ; }
@@ -353,8 +425,10 @@ rm -f "$APPLY_OUT" "$APPLY_OUT.rc" "$STAGE_OUT" "$STAGE_OUT.rc" "$STAGE_OUT.stop
 while : ; do
     if ioc_up ; then
         # set up a (re)started IOC: BENCH:PUB_INIT is 0 after every IOC start, not only after one this loop
-        # happened to see as an outage (1 Nov 2026: a missed restart set rcdaq's run type to HRPPD)
-        if [ "$(ca caget -n -t -w 2 BENCH:PUB_INIT 2> /dev/null)" != 1 ] ; then
+        # happened to see as an outage (1 Nov 2026: a missed restart set rcdaq's run type to HRPPD); and on our
+        # own first pass, as a restarted publisher has none of the choices yet (an IOC already set up says 1)
+        if [ -z "$SET_UP" ] || [ "$(ca caget -n -t -w 2 BENCH:PUB_INIT 2> /dev/null)" != 1 ] ; then
+            SET_UP=1
             scan_init ; choices_init ; stage_init ; put DAQ:BUSY 0 ; put DAQ:CMD ""
             rt_sync
             next_config=0

@@ -87,6 +87,15 @@ def gen(det):
             cabled.append(int(f[1]))
 
 
+    names = dict((int(kv.split('=')[0]), kv.split('=', 1)[1].strip())
+                 for kv in dc.get('SLOT_NAMES', '').split(';') if '=' in kv)
+
+
+    def slot_name(slot):
+        """SLOT_NAMES in detector.conf (as the panel's "cabled" buttons), else the site's readout number"""
+        return names.get(slot, 'readout %d' % readout_of(slot))
+
+
     def readout_of(slot):
         """the site's readout number of a slot (slot 2 = readout 1 turned by 180 deg)"""
         return {2: 1}.get(slot, slot)
@@ -263,7 +272,7 @@ def gen(det):
                    + rule('vis', 'visible', [LX, LY], [(in_area, 'true')]) + '</rules>')
 
         # legend
-        items = [(CAB, 'cabled now: readout %s' % ', '.join(str(readout_of(s)) for s in cabled)),
+        items = [(CAB, 'cabled now: %s' % (', '.join(slot_name(s) for s in cabled) or 'none (cabling.txt)')),
                  (OTHER, 'other readout'), (HL, 'under the laser')]
         if small:
             LY2 = TOP + HA + 52

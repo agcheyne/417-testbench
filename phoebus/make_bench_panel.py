@@ -24,6 +24,7 @@ UNLOCK = 'loc://unlocked$(DID)<VLong>(0)'
 RELOCK_LEFT = 'loc://relock_left$(DID)<VLong>(0)'
 RELOCK_S = 300
 LAST_WRITE = 'loc://last_write$(DID)<VDouble>(0)'
+FACE_VIEW = 'loc://face_view$(DID)<VString>("active")'   # the face shown: "active" or a detector (this window only)
 
 UNITS = [('A', 236), ('B', 1593)]
 STAT_LABELS = ['RUP', 'RDW', 'OVC', 'OVV', 'UNV', 'MAXV', 'TRIP', 'OVP', 'OVT', 'DIS', 'KILL', 'ILK']
@@ -416,19 +417,71 @@ for txt, pv, x, lw, vw in [('pt', 'SCAN:POINT', 12, 18, 40), ('/', 'SCAN:NPOINTS
 update(DX + 336, DY + 222, 76, 22, 'SCAN:ETA', size=9, bold=True, align=0, units=False,
        tooltip='estimated end of the scan')
 
+# which readout the V1742 reads (the active detector's cabling.txt, one slot): buttons for detectors with 2-4
+# slots (named by SLOT_NAMES in detector.conf); bench_publisher.sh rewrites cabling.txt (unlocked, stopped)
+# and the faces. DAQ:CABLED: the slot read now
+def det_slots(d):
+    dd = os.path.join(os.path.dirname(HERE), 'db/detectors', d)
+    slots = sorted(set(int(l.split('#')[0].split()[0]) for l in open(os.path.join(dd, 'mapping.txt'))
+                       if len(l.split('#')[0].split()) >= 4))
+    names = {}
+    for l in open(os.path.join(dd, 'detector.conf')):
+        if l.strip().startswith('SLOT_NAMES='):
+            for kv in l.split('=', 1)[1].split('#')[0].strip().strip('"').split(';'):
+                if '=' in kv:
+                    names[int(kv.split('=')[0])] = kv.split('=', 1)[1].strip()
+    return [(sl, names.get(sl, 'slot %d' % sl)) for sl in slots]
+
+
+label(DX + 12, DY + 252, 46, 24, 'cabled', size=9, fg='dim')
+update(DX + 58, DY + 252, 110, 24, 'DAQ:CABLED', size=10, bold=True, align=0, alarm=False,
+       tooltip='the readout (mapping.txt slot) the V1742 reads now: the active detector\'s cabling.txt')
+for d in sorted(x for x in os.listdir(os.path.join(os.path.dirname(HERE), 'db/detectors')) if not x.startswith('_')):
+    sl = det_slots(d)
+    if not 2 <= len(sl) <= 4:
+        continue
+    bw = (DW - 184) // len(sl)
+    for k, (slot, name) in enumerate(sl):
+        p = dict(raw_a='<actions execute_as_one="true"><action type="write_pv"><pv_name>DAQ:CMD</pv_name>'
+                       '<value>cabling %d</value><description>cabled: %s</description></action></actions>'
+                       % (slot, escape(name)),
+                 text=name, raw_f=font(9, True), raw_bg=color('background_color', C['unused']),
+                 raw_fg=color('foreground_color', C['text']), enabled='false', visible='false',
+                 tooltip='%s: the V1742 now reads %s (mapping.txt slot %d): rewrites db/detectors/%s/cabling.txt '
+                         'for the next runs and redraws the faces (unlocked, rcdaq stopped)' % (d, name, slot, d),
+                 raw_r=rules(enabled_rule(STOPPED, STOPPED_EXP),
+                             rule('vis', 'visible', ['DAQ:ACTIVE_DET'], [('pvStr0=="%s"' % d, 'true')]),
+                             rule('now', 'background_color', ['DAQ:CABLED'],
+                                  [('pvStr0=="%s"' % name, colval(C['blue']))]),
+                             rule('nowfg', 'foreground_color', ['DAQ:CABLED'],
+                                  [('pvStr0=="%s"' % name, colval(C['white']))])))
+        widget('action_button', DX + 172 + k * bw, DY + 252, bw - 4, 24, version='3.0.0', **p)
+
 # ---- detector face with the laser (laser_face_small_DET.bob, from make_laser_face.py): the active detector's
-# (DAQ:ACTIVE_DET, so it follows the setup picker); the panel's lock goes in as $(UNLOCK) (a click on a pad
-# moves the laser there, only unlocked); the stage box under it ----
+# (DAQ:ACTIVE_DET, so it follows the setup picker), or another one picked to look at (FACE_VIEW, this window
+# only, changes nothing); a click on a pad of the active detector's face moves the laser there (unlocked); the
+# stage box under it ----
 AX = 1464
 FACE_H = 420
 DETS = sorted(d for d in os.listdir(os.path.join(os.path.dirname(HERE), 'db/detectors')) if not d.startswith('_'))
 group(AX, SY, W - AX - 6, FACE_H, 'Detector face and laser')
+SHOWN = '(pvStr1=="%s" || (pvStr1=="active" && pvStr0=="%s"))'      # pv0 DAQ:ACTIVE_DET, pv1 FACE_VIEW
+NOT_ACTIVE = 'pvStr1!="active" && pvStr1!=pvStr0'
+label(AX + 178, SY + 3, 92, 22, 'view only', size=10, bold=True, fg='red', align=2, visible='false',
+      tooltip='this is not the active detector: its pads cannot be clicked (the active one: DAQ box, setup)',
+      raw_r=rules(rule('vis', 'visible', ['DAQ:ACTIVE_DET', FACE_VIEW], [(NOT_ACTIVE, 'true')])))
+widget('combo', AX + 274, SY + 3, 150, 22, pv_name=FACE_VIEW, items_from_pv='false', raw_f=font(10),
+       raw_i='<items>%s</items>' % ''.join('<item>%s</item>' % escape(i) for i in ['active'] + DETS),
+       border_alarm_sensitive='false',
+       tooltip='which face to show (this window only; changes nothing). "active" follows the setup picker; '
+               'pad clicks work on the active detector\'s face only')
 widget('embedded', AX + 4, SY + 24, 422, 392, file='laser_face_small.bob', resize=0,
        raw_n='<transparent>true</transparent>',
-       raw_r=rules(rule('det', 'file', ['DAQ:ACTIVE_DET'],
-                        [('pvStr0=="%s"' % d, 'laser_face_small_%s.bob' % d) for d in DETS])))
+       raw_r=rules(rule('det', 'file', ['DAQ:ACTIVE_DET', FACE_VIEW],
+                        [(SHOWN % (d, d), 'laser_face_small_%s.bob' % d) for d in DETS])))
 # click on a pad: move the laser to its centre (STAGE:* through bench_publisher.sh and motor.sh). Transparent
-# buttons over the embedded face, the active detector's only, enabled while unlocked and no scan, run or move
+# buttons over the embedded face, the active detector's only and only while its face is shown, enabled while
+# unlocked and no scan, run or move
 ACTIVE_DET = [l.split('=', 1)[1].strip() for l in open(os.path.join(os.path.dirname(HERE), 'state/active.conf'))
               if l.startswith('DETECTOR=')][0]
 for d in DETS:
@@ -446,8 +499,8 @@ for d in DETS:
                        'during a scan, a run or a move)' % (d, pd['row'], pd['col'], pd['cx'], pd['cy']),
                raw_a='<actions execute_as_one="true">%s</actions>' % acts,
                raw_r=rules(enabled_rule(['SCAN:STATE', 'DAQ:RUNNING', 'STAGE:BUSY'], ' && pvStr1!="running" && pv2==0 && pv3==0'),
-                           rule('det', 'visible', ['DAQ:ACTIVE_DET'], [('pvStr0=="%s"' % d, 'true'),
-                                                                       ('pvStr0!="%s"' % d, 'false')])))
+                           rule('det', 'visible', ['DAQ:ACTIVE_DET', FACE_VIEW],
+                                [('pvStr0=="%s" && %s' % (d, SHOWN % (d, d)), 'true'), ('true', 'false')])))
 # ---- moving the laser (the XY stage), under the face. The panel writes STAGE:CMD / STAGE:X_SP / Y_SP /
 # STEP; bin/bench_publisher.sh runs bin/motor.sh (limits, arrival) and refuses during a scan or a run.
 # STOP writes the controller's stop PVs directly and works locked too. The position is on the face. ----

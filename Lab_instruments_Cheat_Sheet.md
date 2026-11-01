@@ -67,6 +67,8 @@ The bench can hold any MCP-PMT / HRPPD. What changes per detector, and per kind 
 
 Per detector (`db/detectors/<name>/`): `detector.conf` (type, serial, run type, rows × cols, pitch, stage position of pixel 0,0), `hv.conf` (electrode → CAEN unit/channel and setpoints), `mapping.txt` (digitiser slot + channel → pixel), `cabling.txt` (which rcdaq packet reads which slot here).
 
+**Which readout is cabled, from the bench panel:** the DAQ box's "cabled" row shows the readout read now and, for a detector with 2–4 readouts (`SLOT_NAMES` in its `detector.conf`, e.g. Photonis: readout 0 / readout 1 / readout 1 turned), one button each (unlocked, rcdaq stopped). A click rewrites `cabling.txt` for the next runs: the old line stays as a comment with the date, the new readout and the first run it applies to (clicks with no run in between make one note); then `testbench.sh check` and the faces are redrawn (open panels reload them). Every run's begin-run packet keeps the cabling it was taken with; the analysis reads the db's current `cabling.txt`, so analyse old runs from before a change with the cabling of their time (the comments in the file say which runs).
+
 DAQ profiles (`db/daq/`):
 
 | Profile | Window | Use |
@@ -201,7 +203,9 @@ If the tunnel is down, the alarm just skips that output; the room speaker and po
 The two stepper axes (APT controller s/n 70810396) are driven by `~/v1/thor_epics`, which talks to the controller over USB and serves the EPICS PVs of the `iocThorLabs` IOC. Both have to be running before anything can move or be read.
 
 **From the bench panel:** the face is drawn as the stage sees it: x to the right, y down, (0, 0) at the top left (as
-in all our maps and plots). Click a pad to move the laser to its centre (unlocked), or use the
+in all our maps and plots). The drop-down above the face shows another detector's face to look at (this window only,
+changes nothing; "view only" in red, no pad clicks); "active" follows the setup. Click a pad of the active
+detector's face to move the laser to its centre (unlocked), or use the
 "Move the laser (XY stage)" box under the face: x, y
 and Move, jogs X−/X+/Y−/Y+ by the step, Home, and STOP (STOP works locked too; the rest needs the unlock). It runs
 `motor.sh` (same limits), and refuses during a scan, while a run is going, or while a move is still running;

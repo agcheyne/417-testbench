@@ -288,3 +288,30 @@ is there also a place we can select the alarm sound?"
   unlocked click on R1 ch17 -> `move 32.6 96.9`. Then live 20:02 (HV off, rcdaq stopped on photonis): ioc-n1470
   restarted with the publisher stopped, then bench-publisher and hv-annunciator; rcdaq still photonis, nothing
   INVALID, labels complete.
+
+## Face view picker, cabled readout, two publisher fixes (1 Nov 2026, 20:40-21:00)
+
+User: "how do I get the detector face to change?" -> "Yes, add it" (a view-only picker); "can we have an option
+to select which readout is cabled now? and it changes in the db or something?"
+
+- Face picker: a drop-down in the face box's title row, `loc://face_view$(DID)` (this window only): "active"
+  (follows DAQ:ACTIVE_DET) or any detector. The face file rule and the pad buttons' visibility use both PVs:
+  pads only while the active detector's face is shown; a red "view only" otherwise.
+- Cabled readout: `SLOT_NAMES` in detector.conf (Photonis: 0=readout 0;1=readout 1;2=readout 1 turned; in the
+  template too). DAQ box row "cabled": `DAQ:CABLED` (new stringout, start value CABNOW from bench_choices.sh) and
+  one button per slot for detectors with 2-4 slots (DAQ:CMD "cabling SLOT"; unlocked, stopped; the slot read now
+  in blue). bench_publisher.sh `cabling_set`: same refusals as the other DAQ commands, then cabling.txt (old line
+  commented "(replaced below)", a dated "(bench panel): NAME, slot S, from run N on (was slot C)" note, the new
+  line), `testbench.sh check`, `make_laser_face.py`, then DAQ:ACTIVE_DET "-" and back for 1 s so open panels
+  reload the face file (tested: they do). Face legend: "cabled now: <SLOT_NAMES name>".
+- Fixes found on the way: a publisher restarted while the IOC stayed up skipped its set-up (the IOC already said
+  PUB_INIT 1) and had no detector or choices: it now sets up on its own first pass too. A run-type pick could be
+  undone by the 2-s status sync before runtype_poll saw it: the sync now waits while the write count has moved.
+- Tested on the fakes (db copy via BENCH_TEST_DB): view Photek -> pads off, back -> click moves; cabling 2 (same:
+  no-op), 1, 7 (refused), during a run (refused), clicks on the buttons, face reload; publisher restart then 8 quick
+  picks, none lost. Live 20:58 (HV off, stopped): publisher stopped, ioc-n1470 restarted, publisher started.
+- 21:00: the first live clicks (4 within 20 s) stacked 8 comment lines, all "from run ?" (no last file after the
+  rcdaq restart; run 6901 had no file). Now: the next run is the highest of rcdaq's last file, a run the publisher
+  saw going, the panel's begin/end lines in daq_commands.log, the run-number file and the newest file on disk,
+  plus 1; a change with no run since the previous panel change replaces that note (back to the old slot: no note).
+  cabling.txt restored to its committed content (net no change).
