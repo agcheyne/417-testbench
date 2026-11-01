@@ -23,6 +23,8 @@
 #                                   logs/hv_history_YYYYMMDD.csv (no file on days the HV stays off).
 #                                   A unit that cannot be read is an alarm only if its HV was in use
 #                                   (port busy: after BUSY_GRACE s); several checks at once log once.
+#                                   "-u all check" also saves its readings to STATUS_CACHE, for the
+#                                   begin-run packet (daq/get_hv_info.sh); on, off and set drop it.
 #   n1470.sh mute | unmute          silence the alarm sound until the alarm clears; monitoring goes on
 #   n1470.sh test-alarm [--quiet] [--color]
 #                                   are the alarms working? fires every alarm output once with a fake
@@ -45,6 +47,20 @@
 # points at whichever was plugged in last. Units are found by asking every such by-path port for
 # its board serial (MON BDSNUM, read-only) instead.
 # Only one program can use a port at a time: close GECO2020 first.
+#
+# While the EPICS IOC of the two units runs (~/epics/app/iocBoot/iocN1470, docs/epics_plan.md),
+# it has both ports, and every command above goes through its PVs instead, with the same output
+# and much faster; with the IOC stopped, through the ports as before. N1470_BACKEND=serial
+# forces the ports (stop the IOC first), N1470_BACKEND=ioc never falls back to them.
+#
+#   n1470.sh annunciate           the HV alarm annunciator (systemd user service hv-annunciator):
+#                                 every ANN_PERIOD s the check of "-u all check", with the alarm
+#                                 conditions from the IOC's alarm records (the bench panel shows
+#                                 the same), the logs and history as check, the sound again and
+#                                 again until muted (panel / n1470.sh mute) or every sounding
+#                                 channel is acknowledged (panel ack, N1470_U:CHn:ACK), pop-ups; writes the
+#                                 panel's N1470:ALARM_TXT / ALARM_HIST / ANN_ALIVE, follows N1470:MUTE.
+#                                 While it runs, "check" (watch windows, the old timer) only shows.
 
 set -o pipefail         # a failed hv_cmd fails hv_mon too, not just the trailing tr
 
@@ -71,10 +87,13 @@ ALARM_SOUND=/usr/share/sounds/freedesktop/stereo/dialog-warning.oga
 ALARM_REMOTE_PULSE=tcp:127.0.0.1:24713   # also play it on this PulseAudio server (e.g. your laptop through
                                          # an ssh -R tunnel), if it answers within 1 s; empty = room only
 ALARM_VNC_POPUP=1            # also a pop-up window in every running Xvnc display; empty = off
-ALARM_SPEAK=1                # after the sound, say what it is ("HV alarm. Unit A, channel 2, over-current.")
+ALARM_SPEAK=                 # 1: after the sound, say what it is ("HV alarm. Unit A, channel 2, over-current.");
+                             # off since 1 Nov 2026 (user: "dont do that speech")
 ALARM_VOICE=en               #   espeak-ng voice and speed (words per minute); ALARM_SPEAK empty = no speech
 ALARM_SPEED=150
 NOTIFY_REPEAT=60             # s: repeat the notification (and reopen a closed pop-up) while the alarm stays
+# N1470_SILENT=1 in the environment: no sound, speech, notification or pop-up (tests of check / annunciate)
+[ -n "$N1470_SILENT" ] && ALARM_SOUND="" ALARM_REMOTE_PULSE="" ALARM_VNC_POPUP="" ALARM_SPEAK="" QUIET=1
 # desktop session of this user, so notifications and sound also work from ssh / cron
 [ -d "$XDG_RUNTIME_DIR" ] || XDG_RUNTIME_DIR=/run/user/$(id -u)
 [ -d "$XDG_RUNTIME_DIR" ] || XDG_RUNTIME_DIR=/tmp
@@ -87,6 +106,7 @@ HISTORY_CSV=$LOG_DIR/hv_history_%Y%m%d.csv   # date format: one file per day
 HISTORY_EVERY=60                             # s: all channels once per interval; empty = no history
 HV_ON_VMON=10       # V: a unit's HV is "in use" while any channel is ON or ramping or has VMON above this
 BUSY_GRACE=100      # s: a busy port (GECO2020?) on a unit whose HV is in use becomes an alarm after this
+STATUS_CACHE=$(dirname "$LOG_DIR")/state/hv_status.txt   # readings of the last "-u all check"
 
 # Which detector electrode each channel feeds, as [SERIAL:CH]=name; "status" shows it.
 # Filled from the hv.conf of the detector selected with "testbench.sh use detector NAME"
@@ -124,6 +144,7 @@ hv_cmd() {   # CMD PAR [CH] [VAL]
 
 # monitor query; channel params default to all channels (CH:4), output space-separated
 hv_mon() {   # PAR [CH]
+    [ -n "$IOC" ] && { ioc_mon "$@" ; return ; }
     local ch=$2
     [ -z "$ch" ] && [[ $1 != BD* ]] && ch=$NCH
     hv_cmd MON "$1" "$ch" | tr ';' ' '
@@ -143,6 +164,144 @@ parse_ch() {
         [0-3])   echo $1 ;;
         *)       die "channel must be 0-$((NCH-1)) or all" ;;
     esac
+}
+
+# ---- through the EPICS IOC ----
+# One caget per unit reads everything into IOCV; a reading that is INVALID, or older than three of
+# the IOC's scans, counts as none. Writes go through the IOC's own guards: a power-on needs the
+# N1470:BOX_SAFE arm (set here just before it, "on --box-safe" only), and nothing is written to a
+# unit whose port answers with another serial (SN_OK).
+EPICS_BIN=${EPICS_BIN:-$HOME/epics/base/bin/linux-x86_64}
+IOC_CA=${N1470_IOC_CA:-127.0.0.1:5070}   # its CA server, loopback only
+IOC_FAST_MAX=6                           # s: VMON IMON STAT, scanned every 2 s
+IOC_SLOW_MAX=30                          # s: the settings, BDSNUM, BDCTR, BDILK, BDALARM, every 10 s
+IOC_BDPAR=(BDNAME BDSNUM BDFREL BDCTR BDILK BDALARM)
+IOC_CHPAR=(VSET VMON ISET IMON RUP RDW MAXV TRIP POL PDWN STAT)
+IOC_CHALARM=(A_BITS A_VDEV A_IMON A_NOTE ILIM RLOAD TEST)   # the IOC's alarm records (n1470_alarm_ch.db)
+IOC_UNITALARM=(INUSE A_LOST A_BOARD)
+declare -A IOC_FMT=([VSET]=%06.1f [VMON]=%06.1f [TRIP]=%06.1f [ISET]=%07.2f [IMON]=%07.2f
+                    [RUP]=%03d [RDW]=%03d [MAXV]=%04d [STAT]=%05d)   # as the supply sends them
+IOC=""                                   # main sets it: 1 = through the IOC
+
+ca() {   # caget|caput|cainfo ARGS..., asking only the IOC
+    EPICS_CA_AUTO_ADDR_LIST=NO EPICS_CA_ADDR_LIST=$IOC_CA "$EPICS_BIN/$1" "${@:2}"
+}
+
+ioc_up() {   # a refused TCP connect fails at once, so this costs nothing while the IOC is stopped
+    local h=${IOC_CA%:*} p=${IOC_CA##*:}
+    [ -x "$EPICS_BIN/caget" ] && timeout 1 bash -c "exec 3<>/dev/tcp/$h/$p" 2> /dev/null &&
+        ca caget -w 2 -t "N1470_${UNITS[0]%%:*}:SN" > /dev/null 2>&1
+}
+
+ioc_prefix() {   # serial -> N1470_A
+    local u
+    for u in "${UNITS[@]}" ; do [ "$1" == "${u#*:}" ] && { echo "N1470_${u%%:*}" ; return ; } ; done
+    return 1
+}
+
+# FOUND / PROBLEMS as scan() sets them, from the ports the IOC found at its start
+ioc_scan() {
+    local u p dev
+    declare -gA FOUND=()
+    PROBLEMS=""
+    for u in "${UNITS[@]}" ; do
+        p=N1470_${u%%:*}
+        dev=$(ca caget -t -S -w 2 "$p:DEV.VAL\$" 2> /dev/null)
+        if [ -n "$dev" ] && [[ $dev != /nonexistent/* ]] ; then
+            FOUND[${u#*:}]=$dev
+        else
+            PROBLEMS+=$'\n'"  IOC: ${dev:-no answer for $p:DEV} (unit not found when the IOC started: restart the IOC with the unit on)"
+        fi
+    done
+}
+
+# all readings of one unit: IOCV[BDSNUM], IOCV[CH2:VMON] ..., and IOCBAD[...] = why one is unusable
+ioc_open() {   # SERIAL
+    local n v p why pvs=()
+    IOCP=$(ioc_prefix $1) || die "the IOC has only the units in UNITS"
+    declare -gA IOCV=() IOCBAD=()
+    pvs=("$IOCP:SN_OK")
+    for v in "${IOC_BDPAR[@]}" "${IOC_UNITALARM[@]}" ; do pvs+=("$IOCP:$v") ; done
+    for (( n=0 ; n<NCH ; n++ )) ; do
+        for v in "${IOC_CHPAR[@]}" "${IOC_CHALARM[@]}" ; do pvs+=("$IOCP:CH$n:$v") ; done
+    done
+    while IFS='|' read -r p v why ; do
+        IOCV[$p]=$v IOCBAD[$p]=$why
+    done < <(ca caget -a -F '|' -w 2 "${pvs[@]}" 2> /dev/null |
+             awk -F'|' -v pre="$IOCP:" -v now=$(date +%s) -v fast=$IOC_FAST_MAX -v slow=$IOC_SLOW_MAX '
+                NF >= 3 && index($1, pre) == 1 {
+                    n = substr($1, length(pre) + 1) ; par = n ; sub(/^CH[0-9]:/, "", par)
+                    split($2, d, /[-: ]/) ; age = now - mktime(d[1] " " d[2] " " d[3] " " d[4] " " d[5] " " int(d[6]))
+                    why = ""
+                    if ($5 == "INVALID") why = "INVALID (" $4 ")"
+                    else if (par ~ /^(VMON|IMON|STAT)$/ && age > fast) why = "is " age " s old"
+                    else if (par !~ /^(BDNAME|BDFREL|SN_OK|ILIM|RLOAD|TEST)$/ && age > slow) why = "is " age " s old"
+                    print n "|" $3 "|" why
+                }')
+    [ ${#IOCV[@]} -gt 0 ] || die "no answer from the N1470 IOC ($IOC_CA) for $IOCP"
+    [ -z "${IOCBAD[BDSNUM]}" ] && [ -z "${IOCBAD[SN_OK]}" ] ||
+        die "cannot be read through the IOC: $IOCP:BDSNUM ${IOCBAD[BDSNUM]:-${IOCBAD[SN_OK]}} (unit off or USB out? $PORT)"
+    [ "${IOCV[SN_OK]}" == 1 ] || die "$PORT now answers s/n '${IOCV[BDSNUM]}' (IOC: $IOCP:SN_OK ${IOCV[SN_OK]}); refusing"
+}
+
+ioc_mon() {   # PAR [CH]: as hv_mon
+    local par=$1 ch=$2 c v out=()
+    if [[ " ${IOC_BDPAR[*]} " == *" $par "* ]] ; then
+        [ -z "${IOCBAD[$par]}" ] || die "no reading: $IOCP:$par ${IOCBAD[$par]}"
+        echo "${IOCV[$par]}"
+        return
+    fi
+    [[ " ${IOC_CHPAR[*]} " == *" $par "* ]] ||
+        die "the IOC does not read $par (it has ${IOC_BDPAR[*]} ${IOC_CHPAR[*]}); for other queries stop it and use N1470_BACKEND=serial"
+    for (( c=0 ; c<NCH ; c++ )) ; do
+        [ -n "$ch" ] && [ "$ch" != $NCH ] && [ $c != "$ch" ] && continue
+        [ -z "${IOCBAD[CH$c:$par]}" ] || die "no reading: $IOCP:CH$c:$par ${IOCBAD[CH$c:$par]}"
+        v=${IOCV[CH$c:$par]}
+        if [[ ${IOC_FMT[$par]} == *d ]] ; then printf -v v "${IOC_FMT[$par]}" "${v%.*}"
+        elif [ -n "${IOC_FMT[$par]}" ] ; then printf -v v "${IOC_FMT[$par]}" "$v"
+        fi
+        out+=("$v")
+    done
+    echo "${out[*]}"
+}
+
+# caput -c (returns once the IOC has written and read back), failing if the IOC refused it or the
+# supply did not answer OK (the record is then INVALID and the reply in LAST_ERR)
+ioc_put() {   # PV VALUE
+    local out
+    out=$(ca caput -c -w 10 "$1" "$2" 2>&1) && [[ $out != *[Ee]rror* && $out != *denied* ]] ||
+        die "caput $1 $2: $(grep -m 1 -i 'error\|denied\|timed out' <<< "$out" || tail -n 1 <<< "$out")"
+    [ "$(ca caget -t -w 2 "$1.SEVR" 2> /dev/null)" != INVALID ] ||
+        die "$1 $2 -> $(ca caget -t -w 2 "$IOCP:LAST_ERR" 2> /dev/null | sed "s/ *$//") (the supply did not accept it)"
+}
+
+# as hv_cmd SET PAR CH [VAL], through the IOC; prints the supply's reply as hv_cmd does
+ioc_cmd() {   # PAR|ON|OFF CH [VAL]
+    local c pv rc
+    case $1 in
+        OFF)
+            if [ "$2" == $NCH ] ; then ioc_put "$IOCP:ALL:OFF" 1 ; else ioc_put "$IOCP:CH$2:OFF" 1 ; fi ;;
+        ON)
+            if [ "$2" == $NCH ] ; then pv=$IOCP:ALL:ON ; else pv=$IOCP:CH$2:ON ; fi
+            ca caput -t -w 2 N1470:BOX_SAFE 1 > /dev/null 2>&1 || die "cannot arm N1470:BOX_SAFE"
+            for (( c=0 ; c<30 ; c++ )) ; do
+                ca cainfo -w 2 "$pv" 2> /dev/null | grep -q 'Access: *read, write' && break
+                sleep 0.1
+            done
+            ( ioc_put "$pv" 1 ) ; rc=$?
+            ca caput -t -w 2 N1470:BOX_SAFE 0 > /dev/null 2>&1    # it also drops back after 10 s by itself
+            [ $rc -eq 0 ] || exit 1 ;;
+        *)
+            for (( c=0 ; c<NCH ; c++ )) ; do
+                [ "$2" == $NCH ] || [ $c == "$2" ] || continue
+                ioc_put "$IOCP:CH$c:$1_SP" "$3"
+            done ;;
+    esac
+    echo "#BD:$BOARD,CMD:OK"
+}
+
+hv_set() {   # PAR|ON|OFF CH [VAL]
+    if [ -n "$IOC" ] ; then ioc_cmd "$@" ; else hv_cmd SET "$@" ; fi
 }
 
 status() {
@@ -169,10 +328,55 @@ status() {
 
 fgt() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a+0 > b+0) }' ; }   # float A > B
 
+# check's lines through the IOC: which alarms hold comes from its alarm records (the same as the
+# bench panel); the text names the cause with the readings, as check always did
+ioc_check_lines() {
+    local i s b name alarms=() notes=() used=() ex
+    local vset=(${d[VSET]}) vmon=(${d[VMON]}) iset=(${d[ISET]}) imon=(${d[IMON]}) st=(${d[STAT]})
+    for (( i=0 ; i<NCH ; i++ )) ; do
+        s=$((10#${st[$i]}))
+        name="ch$i${ELECTRODE[$SN:$i]:+ (${ELECTRODE[$SN:$i]})}"
+        for b in "${!STAT_BITS[@]}" ; do
+            (( s >> b & 1 )) || continue
+            [[ $NOTREADY_BITS == *" ${STAT_BITS[$b]} "* ]] && notes+=("$name ${STAT_BITS[$b]}")
+            [ "${IOCV[CH$i:A_NOTE]}" == 1 ] && [[ $NOTREADY_BITS == *" ${STAT_BITS[$b]} "* ]] && used+=("$name ${STAT_BITS[$b]}")
+            [ "${IOCV[CH$i:A_BITS]}" == 1 ] && [[ $ALARM_BITS == *" ${STAT_BITS[$b]} "* ]] && alarms+=("$name: ${STAT_BITS[$b]}")
+        done
+        [ "${IOCV[CH$i:A_VDEV]}" == 1 ] &&
+            alarms+=("$name: VMON off -- VMON ${vmon[$i]} V vs VSET ${vset[$i]} V (more than $VTOL V, ON for 30 s)")
+        if [ "${IOCV[CH$i:A_IMON]}" == 1 ] ; then
+            ex=$(awk -v v=${vmon[$i]} -v r="${IOCV[CH$i:RLOAD]}" 'BEGIN { if (r > 0) printf "%.1f", v / r }')
+            if fgt ${imon[$i]} $(awk -v i=${iset[$i]} -v f=$IFRAC 'BEGIN { print i*f }') ; then
+                alarms+=("$name: IMON near trip -- IMON ${imon[$i]} uA above $IFRAC x ISET ${iset[$i]} uA")
+            elif fgt "${IOCV[CH$i:ILIM]}" 0 && fgt ${imon[$i]} "${IOCV[CH$i:ILIM]}" ; then
+                alarms+=("$name: IMON over limit -- IMON ${imon[$i]} uA above ${IOCV[CH$i:ILIM]} uA")
+            elif [ -n "$ex" ] ; then
+                alarms+=("$name: IMON above VMON/R -- IMON ${imon[$i]} uA vs $ex uA (VMON / ${IOCV[CH$i:RLOAD]} MOhm) + 10 %")
+            else
+                alarms+=("$name: IMON high -- IMON ${imon[$i]} uA")
+            fi
+        fi
+    done
+    for (( i=0 ; i<NCH ; i++ )) ; do
+        [ "${IOCV[CH$i:TEST]}" == TEST ] && alarms+=("ch$i${ELECTRODE[$SN:$i]:+ (${ELECTRODE[$SN:$i]})}: TEST alarm (from the panel)")
+    done
+    if [ "${IOCV[A_BOARD]}" == 1 ] ; then
+        [[ ${IOCV[BDALARM]} =~ ^\ *0*\ *$ ]] || alarms+=("board: BDALARM=${IOCV[BDALARM]}")
+        [ "${IOCV[BDILK]}" == YES ] && alarms+=("board: interlock")
+    fi
+    [ ${#notes[@]} -gt 0 ] && printf 'NOTE    not ready: %s\n' "$(IFS=, ; echo "${notes[*]}" | sed 's/,/, /g')"
+    [ ${#used[@]} -gt 0 ] && printf 'NOTE    used channel not ready: %s\n' "$(IFS=, ; echo "${used[*]}" | sed 's/,/, /g')"
+    [ -n "$N1470_FAKE_ALARM" ] && alarms+=("TEST $N1470_FAKE_ALARM")
+    [ ${#alarms[@]} -gt 0 ] && printf "ALARM   $(unit_label $SN) %s\n" "${alarms[@]}"
+    [ ${#alarms[@]} -eq 0 ] && { echo "OK      no alarms" ; return 0 ; }
+    return 3
+}
+
 # status, then one line per alarm; exit 3 if there is any
 check() {
     local i s b name vs vm is im lim alarms=() notes=()
     status || exit 1
+    [ -n "$IOC" ] && { ioc_check_lines ; return ; }
     local st=(${d[STAT]}) vset=(${d[VSET]}) vmon=(${d[VMON]}) iset=(${d[ISET]}) imon=(${d[IMON]})
     local ba ; ba=$(hv_mon BDALARM) || exit 1
     [[ $ba =~ ^\ *0+\ *$ ]] || alarms+=("board: BDALARM=$ba")
@@ -210,7 +414,7 @@ banner() {   # COLOR LINE...
 }
 
 notify() {   # URGENCY TITLE BODY   (desktop on the physical screen)
-    command -v notify-send > /dev/null && notify-send -u $1 -a n1470 "$2" "$3" 2> /dev/null
+    [ -z "$N1470_SILENT" ] && command -v notify-send > /dev/null && notify-send -u $1 -a n1470 "$2" "$3" 2> /dev/null
 }
 
 is_zenity() { [ "$(cat /proc/$(cat "$1" 2> /dev/null)/comm 2> /dev/null)" == zenity ] ; }   # PIDFILE
@@ -233,7 +437,7 @@ popup() {   # KEEP|"" TYPE TITLE TEXT
             kill $(cat "$pid")
         fi
         # GDK_BACKEND=x11: GTK otherwise prefers $XDG_RUNTIME_DIR/wayland-0 and opens on the physical screen
-        DISPLAY=$d XAUTHORITY=$a GDK_BACKEND=x11 zenity --$2 --no-markup --width 500 --title "$3" --text "$4" > /dev/null 2>&1 &
+        DISPLAY=$d XAUTHORITY=$a GDK_BACKEND=x11 zenity --$2 --no-markup --width 500 --title "$3" --text "$4" > /dev/null 2>&1 8>&- &
         echo $! > "$pid"
     done < <(vnc_displays)
 }
@@ -282,7 +486,7 @@ sound_bg() {   # QUEUE|"" FILE...
     kill -0 "$prev" 2> /dev/null && [ -z "$1" ] && return
     shift
     [ $# -gt 0 ] || return
-    ( while kill -0 "$prev" 2> /dev/null ; do sleep 0.5 ; done ; play_alarm "$@" ) > /dev/null 2>&1 &
+    ( while kill -0 "$prev" 2> /dev/null ; do sleep 0.5 ; done ; play_alarm "$@" ) > /dev/null 2>&1 8>&- &
     echo $! > "$pid"
 }
 
@@ -558,11 +762,12 @@ test_alarm() {
 
 # notification + pop-ups when the alarms appear, change, or every NOTIFY_REPEAT s; sound on every
 # call; one "cleared" notification + pop-up when they are gone
+# The lock is fd 8: popup and sound_bg close it for what they leave running, else an open pop-up
+# holds it and every later check waits the 10 s out (seen 1 Nov 2026: checks took 15 s, not 5).
 alarm_actions() {   # ALARM...   (under a lock: a watch and the timer may check at the same time)
-    local lf
-    exec {lf}>> "$XDG_RUNTIME_DIR/n1470-alarm.lock" && flock -w 10 $lf
+    exec 8>> "$XDG_RUNTIME_DIR/n1470-alarm.lock" && flock -w 10 8
     do_alarm_actions "$@"
-    exec {lf}>&-
+    exec 8>&-
 }
 
 do_alarm_actions() {   # ALARM...
@@ -672,24 +877,162 @@ run_unit() {   # SERIAL
     SN=$1
     ME="n1470 [$(unit_label $SN)]"
     PORT=$(unit_port $SN) || exit 1
-    open_port "$PORT"
-    local got=$(hv_mon BDSNUM)
-    [[ $got =~ ^\ *0*$SN\ *$ ]] || die "$PORT now answers s/n '$got'; refusing"
+    if [ -n "$IOC" ] ; then
+        ioc_open $SN
+    else
+        open_port "$PORT"
+        local got=$(hv_mon BDSNUM)
+        [[ $got =~ ^\ *0*$SN\ *$ ]] || die "$PORT now answers s/n '$got'; refusing"
+    fi
+    case $OP in set|on|off) rm -f "$STATUS_CACHE" ;; esac
     case $OP in
         status)
             status ;;
-        check)
+        check|annunciate)
             check ;;
         mon)
             local ch="" ; [ -n "${ARGS[1]}" ] && ch=$(parse_ch ${ARGS[1]})
             hv_mon "${ARGS[0]^^}" $ch ;;
         set)
-            hv_cmd SET ${ARGS[0]^^} $(parse_ch ${ARGS[1]}) ${ARGS[2]} ;;
+            hv_set ${ARGS[0]^^} $(parse_ch ${ARGS[1]}) ${ARGS[2]^^} ;;
         off)
-            hv_cmd SET OFF $(parse_ch ${ARGS[0]}) ;;
+            hv_set OFF $(parse_ch ${ARGS[0]}) ;;
         on)
-            hv_cmd SET ON $(parse_ch ${ARGS[0]}) ;;
+            local ch=$(parse_ch ${ARGS[0]}) c
+            # only channels of the active detector (a row in its hv.conf; user, 1 Nov 2026): the others
+            # stay off, and the IOC refuses them too (CHn:USED). Add a channel to hv.conf to use it.
+            for (( c=0 ; c<NCH ; c++ )) ; do
+                [ "$ch" == $NCH ] || [ $c == "$ch" ] || continue
+                [ -n "${ELECTRODE[$SN:$c]}" ] ||
+                    die "ch$c is not in the detector's hv.conf ($(tb_detector_dir 2> /dev/null || echo 'no detector selected')): not switched on; add it there to use it"
+            done
+            hv_set ON $ch ;;
     esac
+}
+
+# every unit of $list: out (the text), alarms (one line each), rc 3 if any; with SHOW_ONLY no logs
+# and no state (the annunciator keeps those while it runs)
+check_all() {
+    local sn o r l
+    rc=0 ; out="" ; alarms=()
+    for sn in $list ; do
+        o=$( ( run_unit $sn ) 2>&1 ) ; r=$?
+        if [ -n "$SHOW_ONLY" ] ; then
+            UA_ALARMS=() UA_NOTE=""
+            while IFS= read -r l ; do UA_ALARMS+=("${l#ALARM   }") ; done < <(grep '^ALARM   ' <<< "$o")
+            [ $r -eq 1 ] && UA_NOTE="NOTE    $(unit_label $sn): cannot be read (whether that is an alarm: the annunciator)"
+        else
+            unit_assess $sn $r "$o"            # an unreadable unit is an alarm only if its HV was in use
+        fi
+        alarms+=("${UA_ALARMS[@]}")
+        out+="${out:+$'\n\n'}$o${UA_NOTE:+$'\n'$UA_NOTE}"
+    done
+    [ ${#alarms[@]} -gt 0 ] && rc=3            # else 0, also for units off / absent
+}
+
+write_cache() {
+    local tmp
+    tmp=$(mktemp "$STATUS_CACHE.XXXXXX" 2> /dev/null) || return
+    { echo "n1470.sh -u all check at $(date '+%F %T')" ; echo "$out" ; } > "$tmp" && mv "$tmp" "$STATUS_CACHE"
+}
+
+ANN_PERIOD=2             # s between two checks of the annunciator; the sound repeats as fast (a new one
+                         # only after the last has played) while an alarm is neither muted nor acknowledged
+ANN_CACHE_EVERY=30       # s: STATUS_CACHE for the begin-run packet
+PILAS_CA=127.0.0.1:5072
+
+# the laser's alarm records (pilas.db), if its IOC runs
+laser_alarms() {
+    local v
+    v=$(EPICS_CA_AUTO_ADDR_LIST=NO EPICS_CA_ADDR_LIST=$PILAS_CA "$EPICS_BIN/caget" -t -w 1 PILAS:LDTEMP PILAS:LDTEC \
+        PILAS:LDTEMP.SEVR PILAS:LDTEC.SEVR 2> /dev/null) || return
+    set -- $v
+    [ "$1" == bad ] && [ "$3" != INVALID ] && alarms+=("laser: LD temperature bad")   # INVALID: not read yet
+    [ "$2" == off ] && [ "$4" != INVALID ] && alarms+=("laser: LD TEC off")
+}
+
+# TEXT into a CHAR waveform of the IOC, cut to its last (with "first": its first) whole lines within
+# MAX bytes (the records hold 2048 / 4096: a longer caput is refused); a failure goes to stderr
+# (the service's journal)
+put_text() {   # PV TEXT MAX [first]
+    local t=$2 out
+    if [ ${#t} -gt $3 ] ; then
+        if [ "$4" == first ] ; then t=${t:0:$3} ; t=${t%$'\n'*} ; else t=${t: -$3} ; t=${t#*$'\n'} ; fi
+    fi
+    out=$(ca caput -t -S -w 1 "$1" "$t" 2>&1) && [[ $out != *[Ee]rror* ]] && return 0
+    echo "n1470 annunciate: caput $1 (${#t} bytes) failed: $out" >&2
+    return 1
+}
+
+annunciate() {
+    local keys last_keys="" last_notify=0 last_cache=0 now txt hist last_hist="" m l u c unacked
+    [ -n "$N1470_SILENT" ] || QUIET=""
+    log_alarm UNIT "annunciator started (n1470.sh annunciate, pid $$)"
+    while : ; do
+        IOC=""
+        if ioc_up ; then
+            IOC=1 ; ioc_scan
+        else
+            declare -gA FOUND=() ; PROBLEMS=$'\n'"  the N1470 IOC does not answer on $IOC_CA"
+        fi
+        SHOW_ONLY="" ; check_all
+        laser_alarms
+        now=$(date +%s)
+        [ -n "$IOC" ] && [ "$(ca caget -t -w 1 N1470:MUTE 2> /dev/null)" == muted ] && touch "$ALARM_MUTE"
+        # per-channel acknowledge (the panel's ack buttons, N1470_U:CHn:ACK): acknowledged channels do not
+        # sound; an ACK ends when that channel's alarm clears
+        unacked=0
+        declare -A acked=()
+        if [ -n "$IOC" ] ; then
+            while read -r pv v ; do
+                [[ $pv =~ ^N1470_([AB]):CH([0-3]):(ACK|ALARM)$ ]] || continue
+                acked[${BASH_REMATCH[1]}${BASH_REMATCH[2]}${BASH_REMATCH[3]}]=$v
+            done < <(ca caget -w 1 $(for u in A B ; do for c in 0 1 2 3 ; do echo N1470_$u:CH$c:ACK N1470_$u:CH$c:ALARM ; done ; done) 2> /dev/null)
+            # an ACK ends when its channel has no alarm line any more (a NOTE, e.g. a used channel in
+            # KILL, does not keep it: the next alarm there must sound)
+            for u in A B ; do for c in 0 1 2 3 ; do
+                [ "${acked[$u${c}ACK]}" == acknowledged ] || continue
+                printf '%s\n' "${alarms[@]}" | grep -q "^$u s/n [0-9]* ch$c" && continue
+                ca caput -t -w 1 N1470_$u:CH$c:ACK 0 > /dev/null 2>&1 ; acked[$u${c}ACK]=0
+            done ; done
+        fi
+        for l in "${alarms[@]}" ; do
+            if [[ $l =~ ^([AB])\ s/n\ [0-9]+\ ch([0-3]) ]] && [ "${acked[${BASH_REMATCH[1]}${BASH_REMATCH[2]}ACK]}" == acknowledged ] ; then continue ; fi
+            unacked=$((unacked + 1))
+        done
+        # notification + pop-ups (they repeat every NOTIFY_REPEAT s by themselves), no sound there; the sound
+        # here, again and again while anything is neither muted nor acknowledged
+        keys=$(printf '%s\n' "${alarms[@]}" | sed 's/ -- .*//')
+        if [ "$keys" != "$last_keys" ] || { [ ${#alarms[@]} -gt 0 ] && (( now - last_notify >= NOTIFY_REPEAT )) ; } ; then
+            QUIET=1 alarm_actions "${alarms[@]}"       # only on a change and once a NOTIFY_REPEAT: it waits for a lock
+            last_keys=$keys last_notify=$now
+        fi
+        if [ -z "$N1470_SILENT" ] && [ $unacked -gt 0 ] && [ ! -e "$ALARM_MUTE" ] && [ -r "$ALARM_SOUND" ] ; then
+            sound_bg "" "$ALARM_SOUND"
+        fi
+        (( now - last_cache >= ANN_CACHE_EVERY )) && { write_cache ; last_cache=$now ; }
+        [ ${#alarms[@]} -eq 0 ] && rm -f "$ALARM_MUTE"          # a mute ends with the alarm, never before it
+        if [ -n "$IOC" ] ; then
+            [ -e "$ALARM_MUTE" ] && m=1 || m=0
+            ca caput -t -w 1 N1470:MUTE $m > /dev/null 2>&1
+            if [ ${#alarms[@]} -gt 0 ] ; then
+                txt="$(date +%T)  ${#alarms[@]} alarm(s)$([ $unacked -lt ${#alarms[@]} ] && echo ", $(( ${#alarms[@]} - unacked )) acknowledged")"$'\n'
+                for l in "${alarms[@]}" ; do
+                    [[ $l =~ ^([AB])\ s/n\ [0-9]+\ ch([0-3]) ]] && [ "${acked[${BASH_REMATCH[1]}${BASH_REMATCH[2]}ACK]}" == acknowledged ] &&
+                        l+="   (acknowledged)"
+                    txt+="$l"$'\n'
+                done
+            else
+                txt="$(date +%T)  no alarms"$'\n'"$(grep -h '^NOTE    \(used channel\|.*cannot\|.*busy\|.*absent\|.*unreadable\)' <<< "$out" | sed 's/^NOTE    //')"
+            fi
+            put_text N1470:ALARM_TXT "$txt" 2000
+            # newest first: a Phoebus text update shows the top of a long text and cuts the bottom
+            hist=$(tail -n 40 "$ALARM_LOG" 2> /dev/null | cut -c 1-220 | tac)
+            [ "$hist" != "$last_hist" ] && put_text N1470:ALARM_HIST "$hist" 4000 first && last_hist=$hist
+            ca caput -t -w 1 N1470:ANN_ALIVE 1 > /dev/null 2>&1
+        fi
+        sleep $ANN_PERIOD
+    done
 }
 
 # ---- main ----
@@ -715,6 +1058,9 @@ case $OP in
         for a in "$@" ; do
             case $a in --color) COLOR=1 ;; --quiet) QUIET=1 ;; *) usage ;; esac
         done ;;
+    annunciate)
+        [ $# -eq 0 ] || usage
+        UNIT=all ;;
     mon)
         [ $# -ge 1 ] || usage
         [ -n "$2" ] && parse_ch $2 > /dev/null ;;
@@ -722,7 +1068,11 @@ case $OP in
         [ $# -eq 3 ] || usage
         [[ $SETTABLE == *" ${1^^} "* ]] || die "can only set:$SETTABLE(use on/off for power)"
         parse_ch $2 > /dev/null
-        [[ $3 =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "value must be a number" ;;
+        if [ "${1^^}" == PDWN ] ; then
+            [[ ${3^^} == RAMP || ${3^^} == KILL ]] || die "PDWN must be RAMP or KILL"
+        else
+            [[ $3 =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "value must be a number"
+        fi ;;
     off)
         [ $# -eq 1 ] || usage
         parse_ch $1 > /dev/null ;;
@@ -751,12 +1101,25 @@ elif [ -z "$UNIT" ] ; then
 elif [ "${UNIT,,}" != all ] ; then
     SN=$(unit_sn "$UNIT") || exit 1
 else
-    case $OP in status|check|mon|off) ;; *) die "-u all only works with status, check, mon and off" ;; esac
+    case $OP in status|check|mon|off|annunciate) ;; *) die "-u all only works with status, check, mon and off" ;; esac
 fi
 
-scan
+# the annunciator: its own loop, through the IOC only (it never probes a port)
+if [ "$OP" == annunciate ] ; then
+    list="${UNITS[*]#*:}"
+    annunciate
+fi
+
+case ${N1470_BACKEND:-auto} in
+    auto)   ioc_up && IOC=1 ;;
+    ioc)    ioc_up || die "the N1470 IOC does not answer on $IOC_CA (N1470_BACKEND=ioc)" ; IOC=1 ;;
+    serial) ;;
+    *)      die "N1470_BACKEND must be auto, ioc or serial" ;;
+esac
+if [ -n "$IOC" ] ; then ioc_scan ; else scan ; fi
 
 if [ "$OP" == units ] ; then
+    [ -n "$IOC" ] && echo "(through the N1470 IOC on $IOC_CA: the ports it found when it started)"
     for sn in $(printf '%s\n' "${!FOUND[@]}" | sort -n) ; do
         for p in ${FOUND[$sn]} ; do
             printf '%-22s %s (%s)\n' "$(unit_label $sn)" "$p" "$(basename "$(readlink -f "$p")")"
@@ -779,17 +1142,16 @@ else
     done
 fi
 
-# check: collect every unit's output first, so the alarm banner can go on top
+# check: collect every unit's output first, so the alarm banner can go on top. While the
+# annunciator runs (through the IOC), this check only shows: no logs, no sound, no pop-ups.
 if [ $OP == check ] ; then
-    rc=0 ; out="" ; alarms=()
-    for sn in $list ; do
-        o=$( ( run_unit $sn ) 2>&1 ) ; r=$?
-        unit_assess $sn $r "$o"                # an unreadable unit is an alarm only if its HV was in use
-        alarms+=("${UA_ALARMS[@]}")
-        out+="${out:+$'\n\n'}$o${UA_NOTE:+$'\n'$UA_NOTE}"
-    done
-    [ ${#alarms[@]} -gt 0 ] && rc=3            # else 0, also for units off / absent
-    alarm_actions "${alarms[@]}"
+    SHOW_ONLY=""
+    [ -n "$IOC" ] && [ "$(ca caget -t -w 1 N1470:ANN_ALIVE 2> /dev/null)" == running ] && SHOW_ONLY=1
+    check_all
+    if [ -z "$SHOW_ONLY" ] ; then
+        alarm_actions "${alarms[@]}"
+        [ "${UNIT,,}" == all ] && write_cache
+    fi
     if [ ${#alarms[@]} -gt 0 ] ; then
         mute=""
         [ -z "$QUIET" ] && [ -e "$ALARM_MUTE" ] && mute="(sound muted until cleared: n1470.sh unmute)"
@@ -800,6 +1162,7 @@ if [ $OP == check ] ; then
         echo "HV OK   no alarms"
     fi
     echo "$out"
+    [ -n "$SHOW_ONLY" ] && echo $'\n'"(alarm logs, sound and pop-ups: the annunciator, n1470.sh annunciate)"
     exit $rc
 fi
 

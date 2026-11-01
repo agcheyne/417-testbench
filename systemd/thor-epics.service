@@ -1,0 +1,29 @@
+# thor_epics: the ThorLabs APT controller (USB, FTDI) <-> the THOR_X / THOR_Y PVs; moves the stage when
+# a client writes THOR_*:move_abs / move_home / stop (bin/motor.sh, the scans). Before 1 Nov 2026
+# started by hand: ./thor_epics -e in ~/v1. Stopped through its "stop" file, so its todo_for_stop
+# runs. At start it runs ~/v1/todo_for_start (controller settings; no homing, no move).
+# Its first pass ignores the command PVs' values at start, so starting it moves nothing (fixed
+# 1 Nov 2026: the loop skipped THOR_Y:move_abs, which could drive Y to 0 after an IOC restart;
+# old source and binary kept as ~/v1/*.orig_20261101). No homing at start: home by hand after the
+# controller was power-cycled (bin/motor.sh home both --yes).
+[Unit]
+Description=thor_epics: ThorLabs APT XY stage controller for EPICS, 417 test bench
+Requires=ioc-thorlabs.service
+After=ioc-thorlabs.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/417-testbench/systemd/bench.env
+WorkingDirectory=%h/v1
+# -q: no status screen (it redraws several times a second: 2.3 GB a day into the log); the positions
+# still go to EPICS (write_epics_info is not part of the screen)
+ExecStart=%h/v1/thor_epics -e -q
+ExecStop=/usr/bin/touch %h/v1/stop
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=30
+StandardOutput=append:%h/417-testbench/logs/services/thor-epics.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

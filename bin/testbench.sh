@@ -108,8 +108,8 @@ cmd_check() {
         [ "$NAME" == "$n" ] || err "detector.conf: NAME=$NAME, folder is $n"
         [[ $RUNTYPE =~ ^[A-Za-z0-9_-]+$ ]] || err "detector.conf: RUNTYPE '$RUNTYPE' is not a plain word"
         tb_table "$f/hv.conf" | awk -v units=" A B $(sed -n 's/^UNITS=(\(.*\)).*/\1/p' "$N1470" | sed 's/[A-Z]*://g') " '
-            NF != 8 { print "  hv.conf: line \"" $0 "\" needs 8 columns" ; next }
-            { for (i = 4; i <= 8; i++) if ($i != "-" && $i !~ /^[0-9]+(\.[0-9]+)?$/) print "  hv.conf: " $1 ": column " i " is not a number or -" }
+            NF != 8 && NF != 10 { print "  hv.conf: line \"" $0 "\" needs 8 columns (or 10, with imax_uA r_MOhm)" ; next }
+            { for (i = 4; i <= NF; i++) if ($i != "-" && $i !~ /^[0-9]+(\.[0-9]+)?$/) print "  hv.conf: " $1 ": column " i " is not a number or -" }
             $2 != "-" && index(units, " " $2 " ") == 0 { print "  hv.conf: " $1 ": unknown unit " $2 }
             $3 != "-" && $3 !~ /^[0-3]$/ { print "  hv.conf: " $1 ": channel " $3 " not 0-3" }
             ($2 == "-") != ($3 == "-") { print "  hv.conf: " $1 ": give both unit and ch, or neither" }

@@ -1,0 +1,25 @@
+# rcdaq_server, configured after its start by daq/setup_rcdaq.sh for the active detector / DAQ profile
+# (state/active.conf; change them with the panel's setup Apply or testbench.sh use). Before 1 Nov 2026
+# started by hand (hpDIRC_setup.sh / setup_rcdaq.sh). Log: ~/rcdaq.log, as before; the setup's
+# output in logs/daq_commands.log. Stopping it ends a run that is going first (rcdaq_stop.sh).
+[Unit]
+Description=rcdaq_server (DAQ) of the 417 test bench, configured by setup_rcdaq.sh
+Wants=ioc-n1470.service ioc-pilas.service ioc-thorlabs.service
+After=ioc-n1470.service ioc-pilas.service ioc-thorlabs.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/417-testbench/systemd/bench.env
+WorkingDirectory=%h/hpDIRC
+ExecStart=%h/softwarerepo/install/bin/rcdaq_server
+ExecStartPost=-%h/417-testbench/systemd/rcdaq_start_setup.sh
+ExecStop=%h/417-testbench/systemd/rcdaq_stop.sh
+TimeoutStartSec=330
+TimeoutStopSec=60
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:%h/rcdaq.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,20 @@
+# The HV alarm annunciator (docs/phoebus_panel_plan.md): n1470.sh annunciate, through the N1470 IOC.
+# Install (with the IOC services, epics_plan.md step 7):
+#   cp hv-annunciator.service ~/.config/systemd/user/ && systemctl --user daemon-reload
+#   systemctl --user enable --now hv-annunciator.service
+# Once it runs, n1470-check.timer only shows (its checks see N1470:ANN_ALIVE and log nothing):
+# it can be disabled then.
+[Unit]
+Description=HV alarm annunciator (n1470.sh annunciate)
+Wants=ioc-n1470.service
+After=ioc-n1470.service ioc-pilas.service
+
+[Service]
+Type=simple
+EnvironmentFile=%h/417-testbench/systemd/bench.env
+ExecStart=%h/417-testbench/bin/n1470.sh annunciate
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

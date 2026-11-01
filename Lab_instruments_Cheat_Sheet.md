@@ -19,6 +19,37 @@ The instrument scripts live in `bin/` of this repository; run them from the repo
 
 
 
+## Starting the bench (systemd user services)
+
+Everything that has to run all the time is a systemd user service of nptest. Lingering is on, so they
+all start at boot, without anyone logging in. After a reboot, the only thing to do is open the panel
+(`phoebus/bench_panel.sh`, in a VNC desktop or on the lab PC's screen).
+
+| Service | What it runs | Log |
+| --- | --- | --- |
+| `ioc-n1470` | EPICS IOC of both CAEN N1470 units (CA port 5070) | journal |
+| `ioc-pilas` | EPICS IOC of the PiLas laser (CA port 5072) | journal |
+| `ioc-thorlabs` | EPICS IOC of the XY stage, `THOR_X` / `THOR_Y` (CA port 5064) | `logs/services/ioc-thorlabs.log` |
+| `thor-epics` | `~/v1/thor_epics -e`: the APT controller over USB, moves the stage | `logs/services/thor-epics.log` |
+| `rcdaq-server` | `rcdaq_server`, configured at its start by `daq/setup_rcdaq.sh` for the active detector and DAQ profile | `~/rcdaq.log`, setup output in `logs/daq_commands.log` |
+| `bench-publisher` | DAQ and scan status for the panel, the panel's DAQ commands, HV channel names and limits | journal |
+| `hv-annunciator` | the HV alarms (`n1470.sh annunciate`): logs, sound, speech, pop-ups | `logs/hv_alarms.log` |
+
+```bash
+systemctl --user list-units 'ioc-*' thor-epics rcdaq-server bench-publisher hv-annunciator
+```
+
+- **Restart one:** `systemctl --user restart NAME`; stop / start likewise. Stopping `rcdaq-server` ends a run
+  that is going first. Stopping `thor-epics` stops it through its `stop` file.
+- **GECO2020 or the PiLas GUI** need the port: `systemctl --user stop ioc-n1470` (or `ioc-pilas`) first, `start`
+  it afterwards. The scripts (`n1470.sh`, `pilas.sh`) use the serial port by themselves while an IOC is stopped.
+- **Not services:** the VNC desktops `:2` and `:3` (started by hand with `vncserver`; after a reboot they have to
+  be started again to see the panel remotely), and `caRepeater` (CA clients start it themselves).
+- **`thor-epics` at start** moves nothing and does not home (a start-up bug that could drive Y to 0 was fixed on 1 Nov
+  2026). The controller keeps its position and "homed" while it stays powered; after it was switched off, home by hand
+  with the box safe: `bin/motor.sh home both --yes`, then `bin/motor.sh status` says `homed enabled`.
+- Details, and the IOCs' design: `docs/epics_plan.md`; the panel and the alarms: `docs/phoebus_panel_plan.md`.
+
 ## Detectors and DAQ profiles (`db/`, `testbench.sh`)
 
 The bench can hold any MCP-PMT / HRPPD. What changes per detector, and per kind of measurement, is kept as plain-text files in `db/` (in git), and one detector and one DAQ profile are "in use":
@@ -99,7 +130,7 @@ Before powering the detector:
 
 ## HV monitoring and alarms
 
-A background timer (`n1470-check.timer`) runs `n1470.sh -u all check` every minute, whether or not anyone is watching: it raises the alarm and writes the logs below. To look at the live values, run this in a terminal on the lab PC or in VNC (refreshes every 5 s; keep just one):
+The `hv-annunciator` service (`n1470.sh annunciate`) checks every 2 s, through the N1470 IOC, whether or not anyone is watching: it raises the alarm and writes the logs below. The conditions are the IOC's alarm records, so the bench panel shows the same (red / orange rows, the banner, the log). The old minute timer `n1470-check.timer` is disabled. To look at the values in a terminal (on the lab PC or in VNC; it only shows, the annunciator does the alarms):
 
 ```bash
 watch -c -n 5 "$PWD/bin/n1470.sh -u all check --color"
@@ -110,16 +141,20 @@ watch -c -n 5 "$PWD/bin/n1470.sh -u all check --color"
 | Red ALARM banner naming unit, channel and fault | The `watch` terminal |
 | Desktop notification (stays until dismissed, repeats every 60 s) | Lab PC's own screen |
 | Warning pop-up window | Every running VNC desktop (`:2`, `:3`) |
-| Alarm sound, then a spoken message ("HV alarm. Unit A, channel 2, over-current."), every check; "HV alarm cleared" once when it clears | Room speaker, and your remote desktop if the audio tunnel is up |
+| Alarm sound, again and again until it is muted (panel "mute alarm sound", `bin/n1470.sh mute`) or every sounding channel is acknowledged (the panel's `ack` on that row); no speech | Room speaker, and your remote desktop if the audio tunnel is up |
+| Red / orange row, alarm banner, alarm log | The bench panel (`phoebus/bench_panel.sh`) |
 
-- **Alarms:** OVC, OVV, UNV, MAXV, TRIP, OVP, OVT, ILK on any channel, or VMON more than 10 V from VSET (`VTOL`). `KILL` and `DIS` show as a NOTE (not ready), not an alarm.
-- **Silence the sound:** `bin/n1470.sh mute` silences sound and speech (monitoring continues; it unmutes itself when the alarm clears, or `bin/n1470.sh unmute`). `check --quiet` never plays either.
+- **Alarms:** OVC, OVV, UNV, MAXV, TRIP, OVP, OVT, ILK on any channel, the board alarm or interlock, and no readback while the HV is in use (MAJOR); VMON more than 10 V from VSET once the channel has been on without ramping for 30 s (MAJOR); IMON above 90 % of ISET, above the channel's limit (360 uA unless `hv.conf` says otherwise), or more than 10 % above VMON / R where `hv.conf` gives R (MINOR, still sounds). `KILL` and `DIS` on a channel the detector uses show as a NOTE.
+- **Silence the sound:** the panel's "mute alarm sound" button, or `bin/n1470.sh mute` (all alarms; it ends when the alarms clear, or `bin/n1470.sh unmute`); or `ack` on one row (that channel only, until its alarm clears; other channels still sound).
+- **Test a channel's alarm:** the panel's `test` on that row (unlocked): a MAJOR test alarm for 30 s through the whole chain (banner, log, sound, pop-ups). `bin/n1470.sh test-alarm` still tests the outputs without the HV.
+- **Only the detector's channels can be switched on:** a channel needs a row with unit and channel in the active detector's `hv.conf` (`testbench.sh use detector`); `n1470.sh on`, the panel's ON / "ON selected" and the IOC refuse all others (OFF always works). To use another channel, add its row to `hv.conf` (the IOC picks it up within 30 s). To keep a channel off in hardware, set its front-panel switch to OFF (status DIS) or KILL: the supply then refuses ON whatever the software does; HV_EN to use it again.
+- **Switch several channels at once:** tick their `sel` boxes in the panel, then "ON selected" (unlocked and HV box-safe armed) or "OFF selected"; "clear" un-ticks all. The ticks are shared by every window.
 - **Spoken alarm:** after the sound, `espeak-ng` says what is wrong (unit, channel or electrode, fault; the first two problems, then "and N more"). Turn it off with `ALARM_SPEAK=` (empty); voice and speed are `ALARM_VOICE` / `ALARM_SPEED`.
 - **Test the alarms:** `bin/n1470.sh test-alarm` fires every output once (warn the room first; `--quiet` skips the sound) and reports which outputs worked. It affects only that one command: no HV access, and a running `watch` monitor is untouched.
-- **Is a monitor running?** `pgrep -af 'watch .*n1470.sh'` should show exactly one; two monitors give every alarm twice.
+- **Is the annunciator running?** `systemctl --user status hv-annunciator`; the panel's "annunciator" lamp is green and its banner grey when it is down. Any number of `watch` windows is fine: they only show.
 - **Units switched off or unplugged** while their HV is off are not an alarm (one log line). A unit that disappears, or can't be read, while its HV is on IS an alarm; a port held by GECO2020 only becomes one after 5 min (`BUSY_GRACE`).
 - **Logs** (in `logs/`; until the switch-over in the README, the timer still runs `~/hpDIRC/n1470.sh` and logs to `~/hpDIRC/logs/`): `hv_alarms.log` gets one line per alarm start/change/clear, HV on/off, and unit present/absent/busy; `hv_history_YYYYMMDD.csv` gets every channel once a minute, only while the HV is in use (any channel on, ramping, or VMON > 10 V). Idle days write nothing. Read with `tail -f logs/hv_alarms.log`.
-- **Pause / resume the background check:** `systemctl --user stop n1470-check.timer` / `start`; `systemctl --user list-timers` shows when it runs next. It runs while the lab account is logged in (the lab desktop session normally is).
+- **Pause / resume the alarms:** `systemctl --user stop hv-annunciator` / `start`. Without the IOCs (e.g. both stopped for GECO2020), the old timer still works: `systemctl --user enable --now n1470-check.timer`.
 - **Settings** (sound file, remote audio address, pop-ups, repeat time, `HV_ON_VMON`, `BUSY_GRACE`, `HISTORY_EVERY`) are at the top of `bin/n1470.sh`.
 
 ### Alarm sound on your remote desktop (audio tunnel)
@@ -164,15 +199,14 @@ If the tunnel is down, the alarm just skips that output; the room speaker and po
 
 The two stepper axes (APT controller s/n 70810396) are driven by `~/v1/thor_epics`, which talks to the controller over USB and serves the EPICS PVs of the `iocThorLabs` IOC. Both have to be running before anything can move or be read.
 
-**Start them** (each in its own terminal, as nptest):
+**From the bench panel:** click a pad on the detector face to move the laser to its centre (unlocked), or use the
+"Move the laser (XY stage)" box under the face: x, y
+and Move, jogs X−/X+/Y−/Y+ by the step, Home, and STOP (STOP works locked too; the rest needs the unlock). It runs
+`motor.sh` (same limits), and refuses during a scan, while a run is going, or while a move is still running;
+the box shows the result (all of them: `logs/daq_commands.log`).
 
-```bash
-cd $EPICS/app/iocBoot/iocThorLabs && ./st.cmd
-```
-
-```bash
-cd ~/v1 && ./thor_epics -e
-```
+**They are services** (`ioc-thorlabs`, `thor-epics`; see "Starting the bench"). By hand, only with the
+services stopped: `cd $EPICS/app/iocBoot/iocThorLabs && ./st.cmd`, then `cd ~/v1 && ./thor_epics -e`.
 
 Check with `bin/motor.sh status`: both axes should say `homed enabled`.
 
@@ -374,8 +408,9 @@ Limits (`MONO_MIN`/`MONO_MAX`, 200–750 nm: the H20 UV's specified range), step
 | Power meter `cannot claim USB interface` | Another program has the meter (a `watch` in another terminal) | Stop it: only one program at a time |
 | No alarm sound on the remote desktop | Audio tunnel not up | `ss -ltn \| grep 24713` on the lab PC; check `RemoteForward 24713 127.0.0.1:4713` in `~/.ssh/config` and reconnect `ssh <lab-pc>` |
 | HV or laser packet says FAILED | Port busy or device off at begin-run | Close the GUI or switch the device on; the run itself is unaffected |
-| `motor.sh: no answer from EPICS PV` | IOC not running | Start `st.cmd` (see XY stage) |
-| `motor.sh: X did not start moving` | `thor_epics` not running, or the controller is off | Start `~/v1/thor_epics -e`; check the APT controller |
+| `motor.sh: no answer from EPICS PV` | IOC not running | `systemctl --user restart ioc-thorlabs` |
+| `motor.sh: X did not start moving` | `thor_epics` not running, or the controller is off | `systemctl --user restart thor-epics`; check the APT controller |
+| Panel shows a service lamp grey / `no rcdaq_server` | A service stopped | `systemctl --user list-units 'ioc-*' thor-epics rcdaq-server bench-publisher hv-annunciator`; `restart` it |
 | `scan_xy.sh: rcdaq has no run type` | rcdaq set up by another script | `daq/setup_rcdaq.sh` |
 | `no detector selected` / `no DAQ profile selected` | Nothing chosen yet | `bin/testbench.sh use detector NAME` / `use daq PROFILE` |
 

@@ -9,10 +9,24 @@ BIN=$TB_ROOT/bin
 
 # CAEN N1470 HV readback of all units (read-only). A unit that cannot be read (e.g. GECO2020
 # has its port open) is marked FAILED in the text packet and left out of the numeric one.
+# Reading both units takes ~4 s, during which the V1742 is armed but not read out, so this takes
+# the readings of the last n1470.sh check (the minute timer) when they are at most CACHE_MAX_AGE s
+# old, and asks the units only when there are none (timer stopped, or the HV just switched).
+CACHE=$TB_STATE/hv_status.txt
+CACHE_MAX_AGE=150
 > $ANC_PACKETS/hvinfo.txt
 > $ANC_PACKETS/hvinfo_numeric.txt
 date >> $ANC_PACKETS/hvinfo.txt
-if ! timeout 40 "$BIN/n1470.sh" -u all status >> $ANC_PACKETS/hvinfo.txt 2>&1 ; then
+# age from the time the check wrote in its first line: the file's own time comes from the NFS server
+# (npls0), whose clock was ~2 min behind this machine's on 31 Oct 2026
+t=$(head -1 "$CACHE" 2> /dev/null | sed -n 's/^n1470.sh -u all check at //p')
+age=$(( $(date +%s) - $(date -d "${t:-1970-01-01}" +%s 2> /dev/null || echo 0) ))
+# ... and only if it read every unit (a check that found a port busy, e.g. while the IOC started,
+# would otherwise give a packet without readings)
+if [ $age -le $CACHE_MAX_AGE ] && ! grep -q '^n1470 \[' "$CACHE" ; then
+    echo "readings of the last HV check, $age s before this run ($CACHE):" >> $ANC_PACKETS/hvinfo.txt
+    cat "$CACHE" >> $ANC_PACKETS/hvinfo.txt
+elif ! timeout 40 "$BIN/n1470.sh" -u all status >> $ANC_PACKETS/hvinfo.txt 2>&1 ; then
     echo "HV readback FAILED for at least one unit (see above)" >> $ANC_PACKETS/hvinfo.txt
 fi
 

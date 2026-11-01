@@ -1,0 +1,16 @@
+# The ThorLabs XY stage's soft-record IOC (THOR_X / THOR_Y, CA port 5064); thor_epics fills it and
+# moves the stage from it. Before 1 Nov 2026 started by hand: softIoc ./st.cmd in iocThorLabs.
+[Unit]
+Description=EPICS IOC: ThorLabs XY stage soft records (THOR_X/Y), 417 test bench
+
+[Service]
+Type=simple
+WorkingDirectory=%h/epics/app/iocBoot/iocThorLabs
+ExecStart=%h/epics/base/bin/linux-x86_64/softIoc -S st.cmd
+Restart=on-failure
+RestartSec=20
+StandardOutput=append:%h/417-testbench/logs/services/ioc-thorlabs.log
+StandardError=inherit
+
+[Install]
+WantedBy=default.target
