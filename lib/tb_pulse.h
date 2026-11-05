@@ -71,6 +71,28 @@ inline double cfd_time(const double *t, const double *v, int lo, int hi,
   return NaN;
 }
 
+// like cfd_time, but from a straight line fitted through all leading-edge samples between
+// `from` and `to` of the minimum (the time where the line crosses `fraction`). Averages the
+// per-sample timing errors of the DRS4 over the edge: on the TR traces (run 70, 3 Nov 2026) the
+// two-sample CFD has a 13-21 ps random error per group, the fit ~0-12 ps, same mean (< 1 ps).
+// Falls back to cfd_time when fewer than 3 samples lie on the edge.
+inline double edge_fit_time(const double *t, const double *v, int lo, int hi, double fraction = 0.5,
+                            double min_amplitude = 0, double from = 0.2, double to = 0.8)
+{
+  int im = min_index(v, lo, hi);
+  if (!(v[im] < min_amplitude)) return NaN;
+  int i = im;
+  while (i > lo && v[i - 1] <= from * v[im]) i--;   // back to the start of the edge
+  double sx = 0, sy = 0, sxx = 0, sxy = 0;
+  int n = 0;
+  for (int j = i; j <= im; j++)
+    if (v[j] <= from * v[im] && v[j] >= to * v[im]) { sx += t[j] ; sy += v[j] ; sxx += t[j] * t[j] ; sxy += t[j] * v[j] ; n++ ; }
+  double d = n * sxx - sx * sx;
+  if (n < 3 || d == 0) return cfd_time(t, v, lo, hi, fraction, min_amplitude);
+  double b = (n * sxy - sx * sy) / d, a = (sy - b * sx) / n;
+  return (fraction * v[im] - a) / b;
+}
+
 // charge [pC] into 50 ohm of v over [lo, hi): trapezoid in mV*ns, / 50 ohm (1 mV*ns/ohm = 1 pC).
 // Positive for a negative pulse.
 inline double charge_pC(const double *t, const double *v, int lo, int hi, double ohm = 50.0)

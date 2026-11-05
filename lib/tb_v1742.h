@@ -11,9 +11,14 @@
 // V1742Event::fill(): DRS4 calibration picked from the board's own FREQUENCY code and the serial
 // (begin-run packet 921), per-event baseline (median of early samples; this also absorbs the
 // -1329 count shift a whole DRS4 board shows in ~1.4 % of events), spike removal per DRS4 group,
-// and the trigger time of each group (50 % CFD on its TR trace). Times of a channel are only
+// and the trigger time of each group (50 % of its TR trace, from a line fit over the 20-80 %
+// edge: edge_fit_time; trig_edge_fit = false for the old two-sample CFD). Times of a channel are only
 // comparable to its OWN group's trigger: the two DRS4 boards (groups 0/1 and 2/3) are not
 // aligned (3.4 ns rms).
+// boards_aligned: the two boards each take the next trigger they are ready for, so above ~2 kHz
+// they can record different laser pulses in one event (31 Oct 2026, laser at 5 kHz: groups 2/3 one
+// pulse later in ~70 % of events; 2 kHz and below: 100 % aligned). fill() compares the group
+// trigger time tags; sums or coincidences across inputs 0-15 and 16-31 need aligned events.
 #ifndef TB_V1742_H
 #define TB_V1742_H
 
@@ -44,6 +49,7 @@ struct V1742Event {
   int bl_first = 10, bl_last = 110;        // signal baseline samples (before any pulse)
   bool despike = true;
   double trig_fraction = 0.5, trig_min_mv = -100.0;   // NIM trigger pulse is about -800 mV
+  bool trig_edge_fit = true;               // TR time from a line fit over the edge (else CFD on 2 samples)
   int serial = -1;                         // V1742 serial for the calibration file (packet 921)
 
   // --- this event ---
@@ -52,7 +58,9 @@ struct V1742Event {
   double v[NCH][MAXS];                     // mV, baseline subtracted, pulses negative
   double t[NCH][MAXS];                     // ns, calibrated per-cell time axis
   double trig[NTRIG];                      // group trigger times [ns], NaN if not found
-  long n_events = 0;
+  long long ttt[NTRIG] = {};               // group trigger time tags (30-bit counter, 8.53 ns)
+  bool boards_aligned = true;              // all four groups took the same trigger
+  long n_events = 0, n_misaligned = 0;
 
   double trigger_of(int ch) const { return trig[(ch % NSIG) / 8]; }
   double trace_ns() const { return ns > 1 ? t[0][ns - 1] - t[0][0] : 0; }
@@ -84,8 +92,19 @@ struct V1742Event {
         c9[8] = v[NSIG + g];
         despike_group(c9, ns, 10.0, 5);
       }
-    for (int g = 0; g < NTRIG; g++) trig[g] = cfd_time(t[NSIG + g], v[NSIG + g], 0, ns, trig_fraction, trig_min_mv);
+    for (int g = 0; g < NTRIG; g++)
+      trig[g] = trig_edge_fit ? edge_fit_time(t[NSIG + g], v[NSIG + g], 0, ns, trig_fraction, trig_min_mv)
+                              : cfd_time(t[NSIG + g], v[NSIG + g], 0, ns, trig_fraction, trig_min_mv);
+    // same trigger: time tags within 1 count of group 0's, modulo the 30-bit wrap
+    const long long WRAP = 1LL << 30;
+    boards_aligned = true;
+    for (int g = 0; g < NTRIG; g++) {
+      ttt[g] = p->lValue(g, "GROUPTRIGGERTIME");
+      long long d = ((ttt[g] - ttt[0]) % WRAP + WRAP) % WRAP;
+      if (d > 1 && d < WRAP - 1) boards_aligned = false;
+    }
     n_events++;
+    n_misaligned += !boards_aligned;
     return true;
   }
 

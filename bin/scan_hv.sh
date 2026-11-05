@@ -122,7 +122,7 @@ else
     [ "$HV_SUPPLY" == n1470 ] || tb_die "detector $TB_DETECTOR has HV_SUPPLY=$HV_SUPPLY: give the CAEN channel with -u UNIT -c CH"
     ROWS=$(tb_table "$(tb_detector_dir)/hv.conf" | awk -v e="$ELECTRODE" '$2 != "-" && $3 != "-" && (e == "" || $1 == e)')
     case $(echo "$ROWS" | grep -c .) in
-        1) read -r ELECTRODE HVU HVCH _ _ _ _ HVCONF_MAXV <<< "$ROWS" ;;
+        1) read -r ELECTRODE HVU HVCH _ _ _ _ HVCONF_MAXV _ <<< "$ROWS" ;;
         0) tb_die "no cabled electrode ${ELECTRODE:+'$ELECTRODE' }in $(tb_detector_dir)/hv.conf: give -u UNIT -c CH" ;;
         *) tb_die "$TB_DETECTOR has several cabled electrodes: choose one with -e ($(echo "$ROWS" | awk '{ print $1 }' | paste -sd' '))" ;;
     esac
@@ -265,6 +265,7 @@ finish() {   # REASON
     if [ -n "$IN_RUN" ] ; then rcdaq_client daq_end > /dev/null 2>&1 ; IN_RUN= ; fi
     rcdaq_client daq_set_maxevents 0 > /dev/null 2>&1
     rm -f "$POINT_FILE" "$QUIT"
+    echo "# ended $(date '+%F %T'): $1, $DONE of $NPOINTS points" >> "${CSV%.csv}.txt"   # follow_hv_scan.sh waits for it
     local laser="left on" hv
     if [ -n "$LASER_OFF" ] ; then
         if timeout 20 "$BIN/pilas.sh" off > /dev/null 2>&1 ; then

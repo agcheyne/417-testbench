@@ -73,6 +73,13 @@ static int nq() { return auto_spot ? NSIG + 2 : spot_chs.empty() ? NSIG : NSIG +
 static string chname(int ch) { return ch == SPOT ? string("spot") : ch == ALL ? string("all") : Form("ch %d", ch) ; }
 static string chtag(int ch) { return ch == SPOT ? string("spot") : ch == ALL ? string("all") : Form("ch%02d", ch) ; }
 static string chcol(int ch) { return ch == SPOT ? string("spot") : ch == ALL ? string("all") : to_string(ch) ; }   // the table's ch column
+// channels on both DRS4 boards (inputs 0-15 and 16-31): their sum needs ev.boards_aligned
+static bool both_boards(const vector<int> &chs)
+{
+  bool lo = false, hi = false;
+  for (int ch : chs) (ch < NSIG / 2 ? lo : hi) = true;
+  return lo && hi;
+}
 
 void set_charge_window(double a, double b) { cuts.q_from = a ; cuts.q_to = b ; }
 void set_events(int n) { n_events_per_run = n ; }
@@ -88,6 +95,7 @@ struct RunData {
   bool hv_given = false;
   bool hv_on = true;                       // from the 941 status bit; given HV = assumed on
   long events = 0;
+  long misaligned = 0;                     // events whose two DRS4 boards took different triggers
   TH1F *q[NSIG + 2] = {};                  // + the spot sum, + all (set_auto_spot)
   tb::SpeFit fit[NSIG + 2];
   vector<TH1F *> qa[NSIG + 2];             // the same in each set_alt_windows() window
@@ -96,6 +104,7 @@ struct RunData {
   long hits[NSIG] = {};
   vector<float> qev;                       // set_auto_spot(): every event's charges, NSIG x (1 + alt windows), NaN = none
   vector<char> hev;                        // and its pulses, NSIG per event
+  vector<char> aev;                        // and whether its two DRS4 boards took the same trigger
   double contained = NAN, mq_total = NAN;  // the spot's share of the mean charge; that mean charge [pC]
   double mean_spot = NAN, mean_all = NAN;  // mean of the spot and all sums per event [pC], pedestal included
 };
@@ -236,6 +245,8 @@ int process_event(Event *e)
       }
     }
   cur->events++;
+  cur->misaligned += !ev.boards_aligned;
+  if (auto_spot) cur->aev.push_back(ev.boards_aligned);
   double qspot = 0;
   vector<double> qspot_alt(alt_win.size(), 0.0);
   size_t nspot = 0;
@@ -262,7 +273,7 @@ int process_event(Event *e)
       if (auto_spot) cur->qev[first + ch * nper + 1 + a] = q;
     }
   }
-  if (cur->q[SPOT] && !spot_chs.empty() && nspot == spot_chs.size()) {
+  if (cur->q[SPOT] && !spot_chs.empty() && nspot == spot_chs.size() && (ev.boards_aligned || !both_boards(spot_chs))) {
     cur->q[SPOT]->Fill(qspot);
     for (size_t a = 0; a < alt_win.size(); a++) cur->qa[SPOT][a]->Fill(qspot_alt[a]);
   }
@@ -350,14 +361,16 @@ static void fill_auto_spot(RunData &r)
          r.run, 100 * auto_frac, total, r.spot.empty() ? " none (no charge)" : list.c_str(), every.size(), noisy.empty() ? " none" : noisy.c_str(), wmed, ndark.c_str());
   if (!r.spot.empty()) r.q[SPOT]->SetTitle(Form("run %d spot (%s), common mode subtracted;charge [pC];events", r.run, list.c_str() + 1));
   r.q[ALL]->SetTitle(Form("run %d all %zu good channels summed, common mode subtracted;charge [pC];events", r.run, every.size()));
-  // the sums; their mean (main window, all events, no range cut) for the mean-charge gain
+  // the sums; their mean (main window, all events, no range cut) for the mean-charge gain. A sum
+  // over both DRS4 boards only from the events in which they took the same trigger
   double msum[2] = {};
   long mn[2] = {};
+  bool span[2] = {both_boards(r.spot), both_boards(every)};
   for (size_t e = 0; e < nev; e++)
     for (size_t k = 0; k < nper; k++)
       for (int idx : {SPOT, ALL}) {
         const vector<int> &chs = idx == SPOT ? r.spot : every;
-        if (chs.empty()) continue;
+        if (chs.empty() || (span[idx - SPOT] && !r.aev[e])) continue;
         double s = 0;
         bool ok = true;
         for (int ch : chs) { float q = Q(e, ch, k) ; if (std::isnan(q)) { ok = false ; break ; } s += q - C(e, ch, k) ; }
@@ -369,6 +382,7 @@ static void fill_auto_spot(RunData &r)
   r.mean_all = mn[1] ? msum[1] / mn[1] : NAN;
   vector<float>().swap(r.qev);
   vector<char>().swap(r.hev);
+  vector<char>().swap(r.aev);
 }
 
 void add_run(const char *filename, double hv_volts)
@@ -395,7 +409,9 @@ void add_run(const char *filename, double hv_volts)
     prun(left);
     pclose();
   }
-  printf("gain_hv: run %d, %ld events, HV %.1f V%s\n", cur->run, cur->events, cur->hv, cur->hv_given ? " (given)" : "");
+  printf("gain_hv: run %d, %ld events, HV %.1f V%s, %ld (%.1f %%) with the DRS4 boards on different triggers%s\n", cur->run,
+         cur->events, cur->hv, cur->hv_given ? " (given)" : "", cur->misaligned, cur->events ? 100.0 * cur->misaligned / cur->events : 0.0,
+         cur->misaligned ? ": left out of sums over inputs 0-15 and 16-31" : "");
   if (cur->events == 0) { printf("gain_hv: %s left out: no events\n", filename) ; runs.pop_back() ; }
   else if (auto_spot) fill_auto_spot(*cur);
   cur = nullptr;

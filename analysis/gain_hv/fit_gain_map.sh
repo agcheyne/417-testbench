@@ -27,6 +27,10 @@
 #   --points FROM:TO   only these points (the scan's point numbers, both included)
 #   --zmax G           top of the gain colour scale (default: the largest gain)
 #   --resume           keep the chunks already fitted (same window and events) and do the rest
+#   --follow           fit the scan while it is being taken: CHUNK_FOLLOW points at a time as their runs
+#                      are written, up to --jobs at once, the rest once the scan has ended ("# ended" in
+#                      <scan>.txt, or state/scan_point.conf no longer its); then merge and plot. One job reads ~360
+#                      events/s, so a 2 kHz scan of 20k-event points every ~15 s needs ~4-5 jobs to keep up
 #   --merge-only       no fitting: merge and plot the chunks fitted so far
 #
 # The points are fitted in chunks of 10, each chunk's table kept as soon as it is done. Ctrl-C,
@@ -37,7 +41,8 @@
 #   <scan>_gain_map.csv     every fit with a photoelectron peak above the pedestal: point, x_mm,
 #                           y_mm, then gain_hv's columns (run, ch = channel or "spot", gain, mu,
 #                           q1, s0, s1, ...), peak = 1 when the fit is usable and the peak clearly
-#                           resolved (s1 < 0.8 q1 and q1 > 5 s0; the maps use only those),
+#                           resolved (s1 < 0.8 q1, q1 > 5 s0, gain error under 50 %, and gain
+#                           within 3x of the scan's median spot gain; the maps use only those),
 #                           gain_sys_lo/hi (both positive, empty without --syst fits; for "all" the
 #                           spot's), spot_channels and contained (spot rows: its share of the mean
 #                           charge), gain_meanq (all rows: (mean of the sum - fitted pedestal) /
@@ -53,10 +58,10 @@
 HERE=$(dirname "$(readlink -f "$0")")
 tb_site
 
-usage() { sed -n '3,48p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,55p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 SCAN= WINDOW=24.1:27.3 SYST="24.1:27.0 24.1:33.0" CONTAIN=0.95 EVENTS=20000 JOBS=$(( $(nproc) - 1 )) ZMAX=0 POINTS= MODE=fresh
-CHUNK=10
+CHUNK=10 CHUNK_FOLLOW=2
 while [ $# -gt 0 ] ; do
     case $1 in
         --window) WINDOW=$2 ; shift ;;
@@ -68,6 +73,7 @@ while [ $# -gt 0 ] ; do
         --zmax) ZMAX=$2 ; shift ;;
         --resume) MODE=resume ;;
         --merge-only) MODE=merge ;;
+        --follow) MODE=follow ;;
         -h|--help) usage ;;
         -*) tb_die "unknown option $1 (fit_gain_map.sh -h)" ;;
         *) [ -z "$SCAN" ] || tb_die "one scan at a time" ; SCAN=$1 ;;
@@ -125,7 +131,7 @@ merge_and_plot() {
     echo "point,x_mm,y_mm,run,ch,gain,gain_err,mu,mu_err,q1_pC,q1_err,q0_pC,s0_pC,s1_pC,chi2ndf,converged,used,peak,gain_sys_lo,gain_sys_hi,spot_channels,contained,gain_meanq${alt:+,$alt}" > "$OUT"
     awk -F, 'FILENAME ~ /points_csv$/ { pt[$4] = $1 "," $2 "," $3 ; next }
              FILENAME ~ /_spots\.csv$/ { if (FNR > 1) { sp[$1] = $2 ; ct[$1] = $5 ; mall[$1] = $8 } ; next }
-             FNR > 1 && ($1 in pt) { peak = ($16 == 1 && $13 < 0.8 * $9 && $9 > 5 * $12) ? 1 : 0
+             FNR > 1 && ($1 in pt) { peak = ($16 == 1 && $13 < 0.8 * $9 && $9 > 5 * $12 && $6 < 0.5 * $5) ? 1 : 0
                                      lo = hi = 0 ; n = 0
                                      for (i = 17; i < NF; i += 2) if ($i != "" && $9 > 0) {
                                          r = $i / $9 - 1 ; n++
@@ -146,6 +152,13 @@ merge_and_plot() {
                                      printf "\n" }' \
         "$PARTS/points_csv" $(ls "$PARTS"/chunk*_spots.csv 2> /dev/null) $(ls "$PARTS"/chunk*.csv | grep -v _spots) |
         sort -t, -k1,1n -k5,5n >> "$OUT"
+    # outliers: a fit more than 3x away from the median gain of the scan's usable spot fits (either
+    # way) has locked onto something other than the photoelectron peak (31 Oct 2026: 2.2e7 at a
+    # 1.4e6 median, q1 3.5 pC): peak = 0, so the maps and pad medians leave it out
+    awk -F, -v OFS=, 'NR == FNR { if (FNR > 1 && $5 == "spot" && $18 == 1) g[++n] = $6 ; next }
+                      FNR == 1 { if (n) { asort(g) ; med = g[int((n + 1) / 2)] } ; print ; next }
+                      { if ($18 == 1 && med > 0 && ($6 > 3 * med || $6 < med / 3)) $18 = 0 ; print }' \
+        "$OUT" "$OUT" > "$OUT.tmp" && mv "$OUT.tmp" "$OUT"
     local npts
     npts=$(cat $(ls "$PARTS"/chunk*.csv | grep -v _spots | sed 's/\.csv$/.txt/') | grep -c .)
     echo "  $npts of $(grep -c . "$PARTS/points.txt") points fitted ($n chunks, $(cat "$PARTS/settings.txt")):" \
@@ -161,6 +174,67 @@ if [ "$MODE" == merge ] ; then
     [ -r "$PARTS/points.txt" ] || tb_die "no $PARTS: nothing fitted yet"
     merge_and_plot ; exit
 fi
+kill_tree() { local c ; for c in $(pgrep -P "$1") ; do kill_tree "$c" ; done ; kill "$1" 2> /dev/null ; }
+
+# --follow: fit the points while the scan goes on (scan_xy.sh writes a point's CSV line after its run
+# has ended), CHUNK_FOLLOW points per chunk; a last, shorter chunk once the scan has ended
+if [ "$MODE" == follow ] ; then
+    rm -rf "$PARTS"
+    mkdir -p "$PARTS"
+    echo "$SETTINGS" > "$PARTS/settings.txt"
+    : > "$PARTS/points.txt"
+    echo $$ > "$PARTS/driver.pid"
+    SCAN_ID=$(sed -n 's/^# scan .*, id \([0-9]*\),.*/\1/p' "$PREFIX.txt")
+    [ -n "$SCAN_ID" ] || tb_die "no scan id in $PREFIX.txt"
+    echo "scan $NAME: following it, $SETTINGS, up to $JOBS jobs, $CHUNK_FOLLOW points per chunk"
+    echo "  chunks in $PARTS; Ctrl-C stops and plots the chunks done so far"
+    declare -A RUNNING=()
+    QUEUE=() nchunk=0 stopped=
+    trap 'stopped=1' INT TERM
+    while [ -z "$stopped" ] ; do
+        # the end first, then the points: none taken before the end is missed
+        ended=
+        if grep -q '^# ended ' "$PREFIX.txt" ; then ended=1
+        elif [ "$(wc -l < "$CSV")" -gt 1 ] && ! grep -qx "SCAN_ID=$SCAN_ID" "$TB_STATE/scan_point.conf" 2> /dev/null ; then
+            ended=1     # no end line (a scan_xy.sh before 31 Oct 2026, or killed): it no longer writes its point file
+        fi
+        awk -F, -v a=$P_FROM -v b=$P_TO -v done="$PARTS/points.txt" 'FILENAME == done { split($0, f, " ") ; seen[f[1]] ; next }
+             FNR > 1 && $10 == "ok" && $1 >= a && $1 <= b && !($1 in seen) { print $1, $4, $5, $6 }' \
+            "$PARTS/points.txt" "$CSV" > "$PARTS/new.txt"
+        while [ -s "$PARTS/new.txt" ] ; do
+            [ "$(grep -c . "$PARTS/new.txt")" -ge $CHUNK_FOLLOW ] || [ -n "$ended" ] || break
+            c=$(printf '%s/chunk%04d' "$PARTS" $nchunk) ; nchunk=$((nchunk + 1))
+            head -$CHUNK_FOLLOW "$PARTS/new.txt" | tee -a "$PARTS/points.txt" | while read -r p x y run ; do
+                printf '%s/%s/%s-%08d-0000.evt\n' "$DATA_ROOT" "$RUNTYPE" "$RUNTYPE" "$run"
+            done > "$c.txt"
+            sed -i "1,${CHUNK_FOLLOW}d" "$PARTS/new.txt"
+            QUEUE+=("$c")
+        done
+        for pid in "${!RUNNING[@]}" ; do
+            kill -0 $pid 2> /dev/null && continue
+            echo "$(date +%T) $(basename "${RUNNING[$pid]}") done, $(grep -c . "$PARTS/points.txt") points taken, $(( ${#QUEUE[@]} * CHUNK_FOLLOW )) waiting"
+            unset "RUNNING[$pid]"
+        done
+        while [ ${#QUEUE[@]} -gt 0 ] && [ ${#RUNNING[@]} -lt $JOBS ] ; do
+            c=${QUEUE[0]} ; QUEUE=("${QUEUE[@]:1}")
+            ( cd "$HERE" && exec root -b -q -l "fit_gain_map.C(\"$c.txt\", \"$c\", $Q_FROM, $Q_TO, $EVENTS, \"$SYST\", $CONTAIN)" > "$c.log" 2>&1 ) &
+            RUNNING[$!]=$c
+        done
+        [ -n "$ended" ] && [ ${#QUEUE[@]} -eq 0 ] && [ ${#RUNNING[@]} -eq 0 ] && [ ! -s "$PARTS/new.txt" ] && break
+        sleep 5 &
+        wait $! 2> /dev/null
+    done
+    trap - INT TERM
+    if [ -n "$stopped" ] ; then
+        for pid in "${!RUNNING[@]}" ; do kill_tree $pid ; done
+        sleep 1
+        for pid in "${!RUNNING[@]}" ; do rm -f "${RUNNING[$pid]}.root" "${RUNNING[$pid]}_spots.csv" ; done
+        echo "stopped: plotting the chunks finished so far"
+    fi
+    echo "$(date +%T) all chunks done"
+    merge_and_plot ; exit
+fi
+
 if [ "$MODE" == resume ] ; then
     [ -r "$PARTS/settings.txt" ] || tb_die "nothing to resume in $PARTS"
     [ "$(cat "$PARTS/settings.txt")" == "$SETTINGS" ] ||
@@ -194,7 +268,6 @@ t0=$(date +%s)
 printf '%s\n' "${TODO[@]}" |
     xargs -P "$JOBS" -I{} bash -c 'cd "$1" && root -b -q -l "fit_gain_map.C(\"$2.txt\", \"$2\", $3, $4, $5, \"$6\", $7)" > "$2.log" 2>&1' _ "$HERE" {} $Q_FROM $Q_TO $EVENTS "$SYST" $CONTAIN &
 XARGS=$!
-kill_tree() { local c ; for c in $(pgrep -P "$1") ; do kill_tree "$c" ; done ; kill "$1" 2> /dev/null ; }
 stopped=
 trap 'stopped=1 ; kill_tree $XARGS' INT TERM
 while kill -0 $XARGS 2> /dev/null ; do
