@@ -43,6 +43,11 @@ systemctl --user list-units 'ioc-*' thor-epics rcdaq-server bench-publisher hv-a
   that is going first. Stopping `thor-epics` stops it through its `stop` file.
 - **GECO2020 or the PiLas GUI** need the port: `systemctl --user stop ioc-n1470` (or `ioc-pilas`) first, `start`
   it afterwards. The scripts (`n1470.sh`, `pilas.sh`) use the serial port by themselves while an IOC is stopped.
+- **After re-plugging a CAEN USB cable** (or moving hubs): `systemctl --user restart ioc-n1470`. The IOC finds
+  A (236) and B (1593) by board serial only when it starts, then keeps those ports. A unit on another socket shows
+  `N1470_x:SN_OK` 0 (MAJOR alarm, writes refused) or COMM INVALID, and the A/B readings can be swapped. After the
+  restart, `bin/n1470.sh -u all status` shows both units with the right s/n and no `refusing` (4 Nov 2026 swap: A ended
+  up on usb-0:6.3, B on 6.1).
 - **Not services:** the VNC desktops `:2` and `:3` (started by hand with `vncserver`; after a reboot they have to
   be started again to see the panel remotely), and `caRepeater` (CA clients start it themselves).
 - **`thor-epics` at start** moves nothing and does not home (a start-up bug that could drive Y to 0 was fixed on 1 Nov
@@ -403,6 +408,7 @@ Limits (`MONO_MIN`/`MONO_MAX`, 200–750 nm: the H20 UV's specified range), step
 | `n1470: say which unit` | `-u` missing | Add `-u A`, `-u B` or `-u all` |
 | `n1470: unit … not found` | Unit off, or USB not plugged in | Switch it on; check with `bin/n1470.sh units` |
 | `… is in use by: PID` | Another program has the port (GECO2020, PiLas GUI) | Close that program |
+| `n1470: … now answers s/n …; refusing`, `SN_OK` alarm, or one unit COMM INVALID | A CAEN USB cable was re-plugged into another socket while `ioc-n1470` ran; it still uses the ports it found at start | `systemctl --user restart ioc-n1470`; then `bin/n1470.sh -u all status` lists both units |
 | `keithley6487: no reply to *IDN?` | Instrument on GPIB, or wrong baud/terminator | Front panel COMM → RS-232; CONFIG → COMM: 9600, CR, XON/XOFF |
 | Keithley stops answering mid-session | Its command parser is stuck | `bin/keithley6487.sh clear` |
 | `keithley6487: interlock open` | 50 V / 500 V range without the interlock closed | Close INTERLOCK pins 1–2 (lid switch or jumper) |
