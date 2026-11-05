@@ -19,3 +19,8 @@ MsgLog.txt
 *.png
 *.pdf
 *.evt
+analysis/time_xy/time_xy_point
+analysis/check_align/check_align
+
+# third-party vendor material (LabVIEW, JY/Hamamatsu files): kept on disk, not in the repository
+from_GLADD/
