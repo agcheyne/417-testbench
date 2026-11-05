@@ -71,9 +71,6 @@ analysis knows what the data is without a run sheet.
   whatever analysis output belongs to it. Plots and files from single-run studies go in
   `logs/runs/run<N>/`. The HV logs and `testbench.log` stay at the top of `logs/`.
 - `bin/motor.sh` moves and reads the XY stage.
-- `bin/webcam.py` streams the webcam over HTTP; `bin/webcam_snap.sh` takes one picture into
-  `logs/webcam/<date>/`, and `--install` runs it hourly from cron (from the stream if it is up, else
-  it opens the camera for a few seconds).
 
 ## Analysis
 
