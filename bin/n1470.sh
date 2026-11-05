@@ -780,11 +780,20 @@ alarm_actions() {   # ALARM...   (under a lock: a watch and the timer may check 
     exec 8>&-
 }
 
+# mail NOTIFY_EMAIL (db/testbench.conf) in the background; nothing when it is empty (4 Nov 2026)
+mail_alarm() {   # SUBJECT TEXT
+    local NOTIFY_EMAIL=
+    type tb_site > /dev/null 2>&1 && tb_site 2> /dev/null
+    [ -n "$NOTIFY_EMAIL" ] || return 0
+    ( echo "$2" | timeout 30 mail -s "$1" $NOTIFY_EMAIL ) > /dev/null 2>&1 8>&- &
+}
+
 do_alarm_actions() {   # ALARM...
     local state=$XDG_RUNTIME_DIR/n1470-alarms-${UNIT,,} text keys keep f files=()
     if [ $# -eq 0 ] ; then
         if [ -s "$state" ] ; then
             notify normal "N1470 HV alarm cleared" "$(cat "$state")"
+            mail_alarm "417 test bench: HV alarm cleared" "Cleared at $(date '+%F %T'). It was:"$'\n'"$(cat "$state")"
             popup "" info "N1470 HV alarm cleared" "Cleared at $(date +%T). It was:"$'\n'"$(cat "$state")"
             [ -z "$QUIET" ] && [ ! -e "$ALARM_MUTE" ] && f=$(speech_wav "HV alarm cleared.") && sound_bg queue "$f"
         fi
@@ -794,6 +803,7 @@ do_alarm_actions() {   # ALARM...
     text=$(printf '%s\n' "$@")
     keys=$(sed 's/ -- .*//' <<< "$text")                 # a changing reading is not a new alarm
     [ "$keys" == "$(cat "$state" 2> /dev/null)" ] && keep=1
+    [ -z "$keep" ] && mail_alarm "417 test bench: HV ALARM" "$(date '+%F %T')"$'\n'"$text"   # new or changed only
     if [ -z "$keep" ] || (( $(date +%s) - $(stat -c %Y "$state" 2> /dev/null || echo 0) >= NOTIFY_REPEAT )) ; then
         notify critical "N1470 HV ALARM" "$text"
         popup "$keep" error "N1470 HV ALARM" "$(date +%T)"$'\n'"$text"
@@ -963,14 +973,20 @@ laser_alarms() {
 
 # TEXT into a CHAR waveform of the IOC, cut to its last (with "first": its first) whole lines within
 # MAX bytes (the records hold 2048 / 4096: a longer caput is refused); a failure goes to stderr
-# (the service's journal)
+# (the service's journal), its first line only and once per PV until a write works again.
+# Only caput's exit status and stderr count: its stdout is the text written, which may well
+# contain "error" (until 5 Nov 2026 that was taken as a failure, retried every pass, and each
+# retry put the whole 4 kB history into the journal: ~200 MB in two days)
+declare -A PUT_ERR=()
 put_text() {   # PV TEXT MAX [first]
     local t=$2 out
     if [ ${#t} -gt $3 ] ; then
         if [ "$4" == first ] ; then t=${t:0:$3} ; t=${t%$'\n'*} ; else t=${t: -$3} ; t=${t#*$'\n'} ; fi
     fi
-    out=$(ca caput -t -S -w 1 "$1" "$t" 2>&1) && [[ $out != *[Ee]rror* ]] && return 0
-    echo "n1470 annunciate: caput $1 (${#t} bytes) failed: $out" >&2
+    out=$(ca caput -t -S -w 1 "$1" "$t" 2>&1 > /dev/null) && [ -z "$out" ] && { PUT_ERR[$1]="" ; return 0 ; }
+    out="caput $1 (${#t} bytes) failed: ${out%%$'\n'*}"
+    [ "$out" != "${PUT_ERR[$1]}" ] && echo "n1470 annunciate: $out" >&2
+    PUT_ERR[$1]=$out
     return 1
 }
 

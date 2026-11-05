@@ -18,6 +18,8 @@
 #   --no-rest          leave the stage at the last point
 #   --notify "ADDR.."  mail these when the scan ends (default NOTIFY_EMAIL in db/testbench.conf)
 #   --keep-laser       leave the PiLas on at the end (default: switched off, however the scan ends)
+#   --hv-off           switch the detector HV off at the end, however the scan ends
+#                      (testbench.sh hv-off: every channel of both CAEN units)
 #   --skip-hv-check    start even if the CAEN HV check reports an alarm
 #   --dark             scan on purpose with the laser off or the detector HV off (dark counts,
 #                      noise); without it the scan refuses to start in that case
@@ -34,19 +36,19 @@
 # Stopping: "scan_xy.sh --quit" (or touch state/scan.quit) finishes the current point, then
 # goes to the rest position. Ctrl-C ends the current run at once, stops the motors and
 # leaves the stage where it is. In every case the laser is then switched off (not with
-# --keep-laser); the HV is never touched.
+# --keep-laser); the HV is not touched unless --hv-off.
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 BIN=$TB_ROOT/bin
 QUIT=$TB_STATE/scan.quit
 POINT_FILE=$TB_STATE/scan_point.conf
 
-usage() { sed -n '3,35p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,39p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 ORIG_ARGS=("$@")
 tb_site
 MAXT=3600 XSPEC= YSPEC= POINTS= EVENTS= SECONDS_PER= RUNTYPE_OPT= LABEL= ORDER=snake SETTLE=1
-REST=$REST_X,$REST_Y DRY= YES= HVCHECK=1 NOTIFY=$NOTIFY_EMAIL LASER_OFF=1 DARK=
+REST=$REST_X,$REST_Y DRY= YES= HVCHECK=1 NOTIFY=$NOTIFY_EMAIL LASER_OFF=1 DARK= HV_OFF=
 while [ $# -gt 0 ] ; do
     case $1 in
         -x) XSPEC=$2 ; shift ;;
@@ -64,6 +66,7 @@ while [ $# -gt 0 ] ; do
         --notify) NOTIFY=$2 ; shift ;;
         --skip-hv-check) HVCHECK= ;;
         --keep-laser) LASER_OFF= ;;
+        --hv-off) HV_OFF=1 ;;
         --dark) DARK=1 ;;
         --dry-run) DRY=1 ;;
         --yes) YES=1 ;;
@@ -139,7 +142,7 @@ echo "  detector $TB_DETECTOR, DAQ profile $TB_DAQ"
 echo "  X $(echo "$PLAN" | awk '{ print $1 }' | sort -n | sed -n '1p;$p' | paste -sd' ' | sed 's/ / to /') mm," \
      "Y $(echo "$PLAN" | awk '{ print $2 }' | sort -n | sed -n '1p;$p' | paste -sd' ' | sed 's/ / to /') mm, order $ORDER"
 [ -n "$SECONDS_PER" ] && echo "  data-taking time $(( NPOINTS * SECONDS_PER / 60 )) min plus moves"
-echo "  then $( [ -n "$REST" ] && echo "rest at $RX, $RY mm" || echo "stay at the last point"), laser $( [ -n "$LASER_OFF" ] && echo "switched off" || echo "left on")"
+echo "  then $( [ -n "$REST" ] && echo "rest at $RX, $RY mm" || echo "stay at the last point"), laser $( [ -n "$LASER_OFF" ] && echo "switched off" || echo "left on"), HV $( [ -n "$HV_OFF" ] && echo "switched off" || echo "left as it is")"
 echo "  log $CSV"
 
 if [ -n "$DRY" ] ; then
@@ -225,12 +228,21 @@ finish() {   # REASON
     if [ -n "$IN_RUN" ] ; then rcdaq_client daq_end > /dev/null 2>&1 ; IN_RUN= ; fi
     rcdaq_client daq_set_maxevents 0 > /dev/null 2>&1
     rm -f "$POINT_FILE" "$QUIT"
+    echo "# ended $(date '+%F %T'): $1, $DONE of $NPOINTS points" >> "${CSV%.csv}.txt"   # fit_gain_map.sh --follow waits for it
     local laser="left on"
     if [ -n "$LASER_OFF" ] ; then
         if timeout 20 "$BIN/pilas.sh" off > /dev/null 2>&1 ; then
             laser=off ; echo "laser switched off"
         else
             laser="NOT switched off" ; tb_warn "could not switch the laser off: bin/pilas.sh off"
+        fi
+    fi
+    local hv="left as it is"
+    if [ -n "$HV_OFF" ] ; then
+        if timeout 60 "$BIN/testbench.sh" hv-off > /dev/null 2>&1 ; then
+            hv="switched off" ; echo "HV switched off (ramping down)"
+        else
+            hv="NOT switched off" ; tb_warn "could not switch the HV off: bin/testbench.sh hv-off"
         fi
     fi
     if [ "$1" == interrupted ] ; then
@@ -240,7 +252,7 @@ finish() {   # REASON
         echo "moving to the rest position $RX, $RY"
         "$BIN/motor.sh" move $RX $RY > /dev/null || tb_warn "could not reach the rest position"
     fi
-    local msg="scan $SCAN_NAME $1: $DONE of $NPOINTS points, runs ${FIRST_RUN:-none}${LAST_RUN:+-$LAST_RUN}, laser $laser, log $CSV"
+    local msg="scan $SCAN_NAME $1: $DONE of $NPOINTS points, runs ${FIRST_RUN:-none}${LAST_RUN:+-$LAST_RUN}, laser $laser, HV $hv, log $CSV"
     tb_log "$msg"
     echo "$msg"
     [ -n "$NOTIFY" ] && echo "$msg" | mail -s "417 test bench: scan $SCAN_NAME $1" $NOTIFY
@@ -264,7 +276,7 @@ while read -r x y <&3 ; do
     run=$(rcdaq_client daq_status -s | awk '{ print $1 }')
     FIRST_RUN=${FIRST_RUN:-$run} LAST_RUN=$run
     nev=0 start=$(date +%s) st=ok
-    while sleep 1 ; do
+    while sleep 0.2 ; do     # a run ends by itself at -n events: notice it within 0.2 s
         read -r r n rest <<< "$(rcdaq_client daq_status -s)"
         if [ "$r" == -1 ] ; then nev=$EVENTS ; break ; fi   # ended itself at -n events
         nev=$n

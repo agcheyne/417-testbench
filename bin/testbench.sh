@@ -12,13 +12,21 @@
 #   testbench.sh hv-load [--yes]          set VSET/ISET/RUP/RDW/MAXV on the CAEN units from hv.conf.
 #                                         Without --yes it only prints what it would set. It never
 #                                         switches a channel on and refuses to touch one that is on.
+#                                         Also sets PDWN = RAMP, and TRIP where hv.conf gives it.
+#   testbench.sh hv-on --box-safe         switch on every channel of hv.conf (both units, back to back)
+#   testbench.sh hv-off                   switch off every channel of both units
+#   testbench.sh hv-mcp [MCP_V PC_GAP_V [--inter V] [--anode V] [--allow-700] [--wait] [--yes]]
+#                                         two-MCP detector (HRPPD): set the five electrodes from the
+#                                         voltage per MCP and the PC gap (-10 = no photoelectrons),
+#                                         in an order that keeps every gap within its old/new value;
+#                                         no arguments = the gaps now. MCP_V <= 675 (--allow-700: 700).
 #
 # The selection lives in state/active.conf (not in git); TB_DETECTOR=... / TB_DAQ=... in the
 # environment override it for one command.
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 
-usage() { sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,26p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 N1470=$TB_ROOT/bin/n1470.sh
 
 set_active() {   # KEY VALUE
@@ -191,8 +199,8 @@ cmd_hv() {   # show | load [--yes]
     done
     local -a cmds=()
     printf '%-12s %-5s %-3s %-22s %s\n' electrode unit ch "db vset/iset/rup/rdw/maxv" "supply VSET/ISET/RUP/RDW/MAXV  VMON  state"
-    local e u c vset iset rup rdw maxv
-    while read -r e u c vset iset rup rdw maxv ; do
+    local e u c vset iset rup rdw maxv imax rmohm trip
+    while read -r e u c vset iset rup rdw maxv imax rmohm trip _ ; do
         local cur=(${now[$u:$c]})   # VSET VMON ISET IMON RUP RDW MAXV POL STAT
         [ ${#cur[@]} -ge 9 ] || { printf '%-12s %-5s %-3s no readback\n' "$e" "$u" "$c" ; continue ; }
         local st=$((10#${cur[8]})) state=off
@@ -211,6 +219,22 @@ cmd_hv() {   # show | load [--yes]
             fi
             i=$((i + 1))
         done
+        # PDWN RAMP on every row (4 Nov 2026): with KILL a tripped channel drops at once, and on a
+        # detector with one channel per electrode (HRPPD) the gaps next to it then go far above
+        # their values; TRIP (the supply's trip time) when hv.conf gives it
+        local pdwn tr
+        pdwn=$("$N1470" -u "$u" mon PDWN "$c" 2> /dev/null)
+        if [ "$pdwn" != RAMP ] ; then
+            [ $state == off ] || tb_die "$e ($u ch $c) is $state with PDWN ${pdwn:-unread}: switch it off before changing PDWN"
+            cmds+=("$u set PDWN $c RAMP")
+        fi
+        if [ -n "$trip" ] && [ "$trip" != - ] ; then
+            tr=$("$N1470" -u "$u" mon TRIP "$c" 2> /dev/null)
+            if ! tb_fcmp "$trip" == "${tr:-x}" ; then
+                [ $state == off ] || tb_die "$e ($u ch $c) is $state: switch it off before changing TRIP"
+                cmds+=("$u set TRIP $c $trip")
+            fi
+        fi
     done <<< "$rows"
     [ "$mode" == load ] || return 0
     [ ${#cmds[@]} -gt 0 ] || { echo "supply already matches hv.conf" ; return 0 ; }
@@ -225,6 +249,157 @@ cmd_hv() {   # show | load [--yes]
     echo "done (channels are still off; switch on with n1470.sh ... on CH --box-safe)"
 }
 
+# --- the detector's channels as one group (4 Nov 2026, for the HRPPD's five electrodes) -----------
+# NOW[unit:ch] = "VSET VMON ISET IMON RUP RDW MAXV POL STAT" of the units in hv.conf
+declare -A NOW=()
+hv_now() {   # ROWS
+    local unit t ch rest
+    NOW=()
+    for unit in $(echo "$1" | awk '{ print $2 }' | sort -u) ; do
+        t=$(unit_table "$unit") || tb_die "cannot read unit $unit"
+        while read -r ch rest ; do NOW[$unit:$ch]=$rest ; done <<< "$t"
+    done
+}
+hv_state() {   # UNIT CH -> off | ON | ramping | unread
+    local cur=(${NOW[$1:$2]}) st
+    [ ${#cur[@]} -ge 9 ] || { echo unread ; return ; }
+    st=$((10#${cur[8]}))
+    if (( st & 6 )) ; then echo ramping ; elif (( st & 1 )) ; then echo ON ; else echo off ; fi
+}
+
+# all channels of hv.conf on, both units back to back (one command per unit). The IOC switches
+# them all off again if they are not all on within 10 s (n1470_group.db).
+cmd_hv_on() {   # --box-safe
+    tb_active
+    [ "$1" == --box-safe ] || tb_die "refusing to power on without --box-safe (the dark box is closed and the detector is safe to power)"
+    local rows e u c _ n s rates
+    rows=$(hv_rows)
+    [ -n "$rows" ] || tb_die "$TB_DETECTOR: no row in hv.conf has a unit and channel yet"
+    hv_now "$rows"
+    n=$(echo "$rows" | wc -l)
+    while read -r e u c _ ; do
+        s=$(hv_state $u $c)
+        [ $s == off ] || tb_die "$e ($u ch $c) is $s: hv-on switches on a detector that is all off"
+        local cur=(${NOW[$u:$c]})
+        rates+="${cur[4]}/${cur[5]} "
+        if [ $n -gt 1 ] ; then
+            [ "$("$N1470" -u $u mon PDWN $c)" == RAMP ] || tb_die "$e ($u ch $c): PDWN is not RAMP (testbench.sh hv-load --yes sets it)"
+        fi
+    done <<< "$rows"
+    [ $n -gt 1 ] && [ $(tr ' ' '\n' <<< "$rates" | sed '/^$/d' | sort -u | wc -l) -ne 1 ] &&
+        tb_die "the channels' RUP/RDW differ ($rates): they must ramp together (hv.conf, then hv-load --yes)"
+    for u in $(echo "$rows" | awk '{ print $2 }' | sort -u) ; do
+        local chs=$(echo "$rows" | awk -v u=$u '$2 == u { print $3 }')
+        if [ $(echo "$chs" | wc -l) -eq 4 ] ; then
+            "$N1470" -u $u on all --box-safe || tb_die "unit $u did not switch on: testbench.sh hv-off"
+        else
+            for c in $chs ; do "$N1470" -u $u on $c --box-safe || tb_die "$u ch $c did not switch on: testbench.sh hv-off" ; done
+        fi
+    done
+    tb_log "hv-on $TB_DETECTOR"
+    echo "switched on: $(echo "$rows" | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $1 }') (testbench.sh hv-mcp to watch the ramp)"
+}
+
+cmd_hv_off() {
+    "$N1470" -u all off all && tb_log "hv-off (both units, all channels)"
+}
+
+# electrode voltages of a two-MCP detector from MCP_V (per MCP) and PC_GAP_V (PC to MCP1 entry;
+# negative = PC less negative than MCP1 entry, no photoelectrons reach the MCPs). VSETs are
+# written so that no gap passes its old or new value on the way (equal ramp rates): the ones
+# that go down first, from the PC down, then the ones that go up, from the anode up.
+MCP_ELECTRODES="PC MCP1-entry MCP1-exit MCP2-entry MCP2-exit"
+cmd_hv_mcp() {   # [MCP_V PC_GAP_V [--inter V] [--anode V] [--allow-700] [--wait] [--yes]]
+    tb_active
+    local mcp= gap= inter=200 anode=200 allow= wait= yes= rows e u c vset _x maxv
+    while [ $# -gt 0 ] ; do
+        case $1 in
+            --inter) inter=$2 ; shift ;;
+            --anode) anode=$2 ; shift ;;
+            --allow-700) allow=1 ;;
+            --wait) wait=1 ;;
+            --yes) yes=1 ;;
+            -[0-9]*) ;&
+            [0-9]*) if [ -z "$mcp" ] ; then mcp=$1 ; elif [ -z "$gap" ] ; then gap=$1 ; else usage ; fi ;;
+            *) usage ;;
+        esac
+        shift
+    done
+    rows=$(hv_rows)
+    declare -A U=() C=() MAXV=() WANT=()
+    while read -r e u c vset _x _x _x maxv _ ; do U[$e]=$u C[$e]=$c MAXV[$e]=$maxv ; done <<< "$rows"
+    for e in $MCP_ELECTRODES ; do
+        [ -n "${U[$e]}" ] || tb_die "$TB_DETECTOR: hv.conf has no row $e with a unit and channel (hv-mcp needs $MCP_ELECTRODES)"
+    done
+    hv_now "$rows"
+    if [ -z "$mcp" ] ; then hv_gaps ; return ; fi
+    [ -n "$gap" ] || usage
+    local n
+    for n in "$mcp" "$gap" "$inter" "$anode" ; do [[ $n =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || tb_die "not a number: $n" ; done
+    local mmax=675 why=" (above 675: afterpulsing > 4 %, the Incom lifetime limit; --allow-700 to go to 700)"
+    [ -n "$allow" ] && mmax=700 why=
+    tb_fcmp "$mcp" '>=' 0 && tb_fcmp "$mcp" '<=' $mmax || tb_die "MCP_V $mcp outside 0-$mmax V per MCP$why"
+    tb_fcmp "$gap" '>=' -10 && tb_fcmp "$gap" '<=' 400 || tb_die "PC_GAP_V $gap outside -10 to 400 V (Incom's test range)"
+    tb_fcmp "$inter" '>=' 0 && tb_fcmp "$inter" '<=' 250 || tb_die "--inter $inter outside 0-250 V"
+    tb_fcmp "$anode" '>=' 0 && tb_fcmp "$anode" '<=' 250 || tb_die "--anode $anode outside 0-250 V"
+    WANT[MCP2-exit]=$anode
+    WANT[MCP2-entry]=$(tb_calc "$anode + $mcp")
+    WANT[MCP1-exit]=$(tb_calc "$anode + $mcp + $inter")
+    WANT[MCP1-entry]=$(tb_calc "$anode + 2 * $mcp + $inter")
+    WANT[PC]=$(tb_calc "$anode + 2 * $mcp + $inter + $gap")
+    local states="" s down=() up=()
+    printf '%-12s %-5s %-3s %8s -> %8s  %s\n' electrode unit ch VSET new state
+    for e in $MCP_ELECTRODES ; do
+        s=$(hv_state ${U[$e]} ${C[$e]}) ; states+=" $s"
+        local cur=(${NOW[${U[$e]}:${C[$e]}]})
+        printf '%-12s %-5s %-3s %8s -> %8s  %s\n' "$e" "${U[$e]}" "${C[$e]}" "${cur[0]}" "${WANT[$e]}" "$s"
+        [ "${MAXV[$e]}" == - ] || tb_fcmp "${WANT[$e]}" '<=' "${MAXV[$e]}" || tb_die "$e: ${WANT[$e]} V above its maxv ${MAXV[$e]} in hv.conf"
+        if tb_fcmp "${WANT[$e]}" '<' "${cur[0]}" ; then down+=("$e")
+        elif tb_fcmp "${WANT[$e]}" '>' "${cur[0]}" ; then up=("$e" "${up[@]}")
+        fi
+    done
+    [[ $states == *unread* ]] && tb_die "a channel could not be read: nothing set"
+    [[ $states == *ramping* ]] && tb_die "a channel is still ramping: wait for it (testbench.sh hv-mcp shows the gaps)"
+    [[ $states == *ON* && $states == *off* ]] && tb_die "some channels are on and some off: testbench.sh hv-off, or switch the rest on"
+    [ ${#down[@]} -gt 0 ] || [ ${#up[@]} -gt 0 ] || { echo "already set" ; return 0 ; }
+    echo "order: ${down[*]:+down ${down[*]}}${down[*]:+${up[*]:+, then }}${up[*]:+up ${up[*]}}"
+    [ -n "$yes" ] || { echo "(nothing done: add --yes to set these)" ; return 0 ; }
+    for e in "${down[@]}" "${up[@]}" ; do
+        "$N1470" -u ${U[$e]} set VSET ${C[$e]} ${WANT[$e]} > /dev/null || tb_die "failed to set $e VSET; testbench.sh hv-off if in doubt"
+    done
+    tb_log "hv-mcp $TB_DETECTOR: $mcp V per MCP, PC gap $gap V (inter $inter, anode $anode)"
+    echo "set: $mcp V per MCP, PC gap $gap V"
+    [ -n "$wait" ] || return 0
+    local t0=$SECONDS
+    while : ; do
+        sleep 4
+        hv_now "$rows"
+        hv_gaps
+        local done=1
+        for e in $MCP_ELECTRODES ; do
+            local cur=(${NOW[${U[$e]}:${C[$e]}]})
+            [ "$(hv_state ${U[$e]} ${C[$e]})" == off ] && continue
+            tb_fcmp "$(tb_calc "${cur[1]} - ${WANT[$e]}")" '<=' 2 && tb_fcmp "$(tb_calc "${WANT[$e]} - ${cur[1]}")" '<=' 2 || done=
+        done
+        [ -n "$done" ] && { echo "reached" ; return 0 ; }
+        [ $((SECONDS - t0)) -lt 900 ] || tb_die "not reached after 15 min"
+    done
+}
+# one line: the gaps from VMON, and each electrode's VMON / IMON
+hv_gaps() {
+    local e v=() i=()
+    for e in $MCP_ELECTRODES ; do
+        local cur=(${NOW[${U[$e]}:${C[$e]}]})
+        v+=("$(tb_calc "${cur[1]:-nan} + 0")") i+=("$(tb_calc "${cur[3]:-nan} + 0")")
+    done
+    printf '%s  PC gap %s  MCP1 %s  inter %s  MCP2 %s  anode %s V |' "$(date +%T)" \
+        "$(tb_calc "${v[0]} - ${v[1]}")" "$(tb_calc "${v[1]} - ${v[2]}")" "$(tb_calc "${v[2]} - ${v[3]}")" \
+        "$(tb_calc "${v[3]} - ${v[4]}")" "${v[4]}"
+    local k=0
+    for e in $MCP_ELECTRODES ; do printf ' %s %s V %s uA' "$e" "${v[$k]}" "${i[$k]}" ; k=$((k + 1)) ; done
+    echo
+}
+
 case $1 in
     list)    cmd_list ;;
     use)     shift ; cmd_use "$@" ;;
@@ -233,5 +408,8 @@ case $1 in
     new)     [ -n "$2" ] || usage ; cmd_new "$2" ;;
     hv-show) cmd_hv show ;;
     hv-load) cmd_hv load "$2" ;;
+    hv-on)   cmd_hv_on "$2" ;;
+    hv-off)  cmd_hv_off ;;
+    hv-mcp)  shift ; cmd_hv_mcp "$@" ;;
     *)       usage ;;
 esac
