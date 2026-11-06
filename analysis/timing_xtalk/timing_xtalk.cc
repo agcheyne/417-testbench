@@ -105,7 +105,7 @@ int process_event(Event *e)
 {
   if (e->getEvtType() == 9) {
     info.parse(e);
-    ev.serial = info.serial;
+    ev.begin_run(e);   // serial and calibration of this run's digitiser
     if (!db_ok || (!info.detector.empty() && info.detector != db.detector)) db_ok = db.load(info.detector);
     return 0;
   }

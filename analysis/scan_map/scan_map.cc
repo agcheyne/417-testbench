@@ -1,20 +1,20 @@
-// scan_map - detector response vs laser position from an XY scan (bin/scan_xy.sh).
+// scan_map - detector response vs laser position from an XY scan (scans/scan_xy.sh).
 //
 // Stage 1, one run per scan point:
 //   ./scan_map.sh
 //   root [1] set_signal_window(17, 35)
-//   root [2] add_scan("../../logs/scans/20261030_101500_tile66_map/20261030_101500_tile66_map.csv")   // every point of the scan
-//   root [3] save_points("tile66_points.root")
+//   root [2] add_scan("../../logs/scans/20261029_204240_photonis_readout0_map/20261029_204240_photonis_readout0_map.csv")   // every point of the scan
+//   root [3] save_points("photonis_points.root")
 // Stage 2, maps and geometry (also from a saved points file, without the data):
-//   root [4] make_maps()                    // or make_maps("tile66_points.root")
+//   root [4] make_maps()                    // or make_maps("photonis_points.root")
 //   root [5] draw_channel_map(20) ; save_maps()
-//   root [6] save_plots("tile66")           // tile66_overview.png, tile66_channels.png
-//   root [7] save_plots("tile66_try", 32.4, 72.0)   // map grid drawn with pixel (0,0) at a trial position
+//   root [6] save_plots("photonis")         // photonis_overview.png, photonis_channels.png
+//   root [7] save_plots("photonis_try", 32.4, 72.0)   // map grid drawn with pixel (0,0) at a trial position
 //
 // Stage 1 reduces every (point, channel) to one row of the "points" tree: position, events,
 // occupancy (hits / events with a trigger), mean amplitude, charge and CFD time of the hits.
-// The position is the stage readback stored in the run (packet 932), else the scan log's readback,
-// else the scan target (911), else packet 931 (whole mm). Pixels come from the mapping + cabling in the db.
+// The position is the stage readback stored in the run (packet 931, older runs 932), else the scan log's readback,
+// else the scan target (911), else the hpDIRC packet 931 (whole mm). Pixels come from the mapping + cabling in the db.
 //
 // Stage 2: per-channel occupancy maps over the scan grid, the best channel at every point,
 // and each channel's centroid: the mean position weighted by occupancy above the channel's own
@@ -102,7 +102,7 @@ int process_event(Event *e)
   if (!acc.active) return 0;
   if (e->getEvtType() == 9) {
     info.parse(e);
-    ev.serial = info.serial;
+    ev.begin_run(e);   // serial and calibration of this run's digitiser
     if (!db_ok || (!info.detector.empty() && info.detector != db.detector)) {
       db_ok = db.load(info.detector);
       detector_name = db_ok ? db.detector : "";
@@ -150,8 +150,8 @@ void add_run(const char *filename, int point, double x_mm, double y_mm)
     pclose();
   }
   acc.active = false;
-  // position: stage readback in the run (932), else the scan log's readback, else the scan
-  // target (911), else 931 (whole mm only: older runs)
+  // position: stage readback in the run (931 / 932), else the scan log's readback, else the scan
+  // target (911), else the hpDIRC 931 (whole mm only: older runs)
   double x = info.x_whole_mm ? NAN : info.x, y = info.x_whole_mm ? NAN : info.y;
   if (std::isnan(x) && x_mm >= 0) { x = x_mm ; y = y_mm ; }
   if (std::isnan(x)) { x = info.target_x ; y = info.target_y ; }

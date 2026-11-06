@@ -7,7 +7,7 @@
 //   root [4] add_run(...) ...                         // or add_runs("series.txt")
 //   root [5] fit_all() ; gain_curve(20) ; working_point(20, 1e6) ; save()
 //
-// After an HV scan (bin/scan_hv.sh), the same in batch with the plots saved in the scan's folder:
+// After an HV scan (scans/scan_hv.sh), the same in batch with the plots saved in the scan's folder:
 //   ./fit_hv_scan.sh ../../logs/scans/<scan> --spot "20 12 19 21 22 23"     (runs fit_hv_scan.C)
 //
 // set_spot() adds one more spectrum per run, the charge summed over a group of pixels, for
@@ -208,7 +208,7 @@ int process_event(Event *e)
   if (!cur && !find_prof) return 0;
   if (e->getEvtType() == 9) {
     info.parse(e);
-    ev.serial = info.serial;
+    ev.begin_run(e);   // serial and calibration of this run's digitiser
     toff_tried = false;
     if (cur) {
       cur->run = info.run;

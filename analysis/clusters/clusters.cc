@@ -109,7 +109,7 @@ int process_event(Event *e)
 {
   if (e->getEvtType() == 9) {
     info.parse(e);
-    ev.serial = info.serial;
+    ev.begin_run(e);   // serial and calibration of this run's digitiser
     if (!info.detector.empty()) detector_name = info.detector;
     printf("clusters: run %d, detector %s\n", info.run, info.detector.empty() ? "? (not in the data)" : info.detector.c_str());
     if (std::isnan(qw_from)) printf("clusters: no set_charge_window(): no fixed-window charge, so no pedestal for draw_charge()'s fit\n");

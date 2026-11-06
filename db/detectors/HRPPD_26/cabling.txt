@@ -3,10 +3,11 @@
 #
 #   packet  slot
 #
-# packet  2000 + 10*link + node (setup_rcdaq.sh; the single V1742 here is 2000)
+# packet  2000 + 10*link + node: 2000 = V1742 board 0 (s/n 49), 2001 = board 1 (s/n 51240). setup_rcdaq.sh
+# reads the boards listed here (board 0 alone if none is), so a 2001 row = both boards
 # Leave empty until checked: the analysis then labels channels by packet and number.
 
 # Slots are 8 * block + mapping.c slot (see mapping.txt). The 4-V1742 setup in
 # hpDIRC_sigma_hits.cc read packets 2000/2010/2020/2030 from mapping.c slots 3/6/0/5 of one
-# block. Room 417 has one V1742 (packet 2000): fill in the slot it is on, e.g. block C0 slot 3:
+# block. Room 417 has two V1742s (packets 2000, 2001): fill in the slot each is on, e.g. block C0 slot 3:
 #   2000  3

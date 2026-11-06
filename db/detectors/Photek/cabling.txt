@@ -3,9 +3,10 @@
 #
 #   packet  slot
 #
-# packet  2000 + 10*link + node (setup_rcdaq.sh; the single V1742 here is 2000)
+# packet  2000 + 10*link + node: 2000 = V1742 board 0 (s/n 49), 2001 = board 1 (s/n 51240). setup_rcdaq.sh
+# reads the boards listed here (board 0 alone if none is), so a 2001 row = both boards
 # Leave empty until checked: the analysis then labels channels by packet and number.
 
-# The Photek has eight 32-channel readout blocks (octants, slots 0-7); the single V1742 reads one
+# The Photek has eight 32-channel readout blocks (octants, slots 0-7); each V1742 reads one
 # octant at a time (as in the MCP_Scan octant scans), e.g. octant 3:
 #   2000  3

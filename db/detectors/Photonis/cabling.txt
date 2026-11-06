@@ -3,12 +3,14 @@
 #
 #   packet  slot
 #
-# packet  2000 + 10*link + node (setup_rcdaq.sh; the single V1742 here is 2000)
+# packet  2000 + 10*link + node: 2000 = V1742 board 0 (s/n 49), 2001 = board 1 (s/n 51240). setup_rcdaq.sh
+# reads the boards listed here (board 0 alone if none is), so a 2001 row = both boards
 # Leave empty until checked: the analysis then labels channels by packet and number.
 
-# The Photonis has two 32-channel readouts (slots 0 and 1); the single V1742 reads one of them,
-# e.g. readout 0:
+# The Photonis has two 32-channel readouts (slots 0 and 1); one V1742 reads one of them, two read
+# both, e.g. readout 0 on board 0 and readout 1 on board 1:
 #   2000  0
+#   2001  1
 
 # 27 Oct 2026: the V1742 reads readout 0 (laser at 65, 82 mm sits on ch20 = pixel 2,5 of readout 0)
 # 30 Oct 2026: moved to readout 1, the lower half (rows 4-7, y 98-117 mm). Its connector went on

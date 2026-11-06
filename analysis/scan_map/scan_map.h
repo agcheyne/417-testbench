@@ -14,7 +14,7 @@ void set_charge_window(double from_ns, double to_ns);   // default: around each 
 void set_events(int n = 5000);                          // events per point (0 = all)
 // a scan_xy.sh log (logs/scans/<scan>/<scan>.csv): every point's run, found under DATA_ROOT
 void add_scan(const char *csv);
-// one run; x_mm / y_mm only used if the run has no position packets (932 / 911)
+// one run; x_mm / y_mm only used if the run has no position packets (931 / 932 / 911)
 void add_run(const char *filename, int point = -1, double x_mm = -1, double y_mm = -1);
 void save_points(const char *filename = "scan_points.root");
 

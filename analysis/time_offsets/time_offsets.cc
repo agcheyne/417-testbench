@@ -78,8 +78,8 @@ int process_event(Event *e)
 {
   if (e->getEvtType() == 9) {
     info.parse(e);
-    ev.serial = info.serial;
-    if (info.serial >= 0) serial = info.serial;
+    ev.begin_run(e);   // serial and calibration of this run's digitiser
+    if (ev.serial >= 0) serial = ev.serial;
     return 0;
   }
   if (!ev.fill(e)) return 0;

@@ -55,7 +55,7 @@ int main(int argc, char **argv)
   if (status) { fprintf(stderr, "cannot open %s\n", argv[1]) ; return 1 ; }
   Event *e;
   while ((n < nmax || (nmax == 0 && !info.seen)) && (e = it.getNextEvent())) {
-    if (e->getEvtType() == 9) { info.parse(e) ; ev.serial = info.serial ; delete e ; continue ; }
+    if (e->getEvtType() == 9) { info.parse(e) ; ev.begin_run(e) ; delete e ; continue ; }
     if (!ev.fill(e)) { delete e ; continue ; }
     delete e;
     if (!loaded) { toff.load(ev.serial, ev.freq) ; loaded = true ; }

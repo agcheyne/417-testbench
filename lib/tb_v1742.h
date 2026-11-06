@@ -1,17 +1,19 @@
 // tb_v1742.h - event preparation shared by the 417 test-bench pmonitor analyses (needs the
-// Event library: Event, Packet, caen_correction).
+// Event library: Event, Packet, caen_calibration, caen_correction).
 //
 //   static tb::V1742Event ev;           // big (two 36 x 1024 arrays): keep it static / on the heap
 //   static tb::RunInfo info;
 //   int process_event(Event *e) {
-//     if (e->getEvtType() == 9) { info.parse(e) ; ev.serial = info.serial ; return 0 ; }
+//     if (e->getEvtType() == 9) { info.parse(e) ; ev.begin_run(e) ; return 0 ; }
 //     if (!ev.fill(e)) return 0;        // calibrated, baseline-subtracted, despiked, triggers found
 //     tb::ChannelHit h = tb::measure(ev, ch, cuts);
 //
-// V1742Event::fill(): DRS4 calibration picked from the board's own FREQUENCY code and the serial
-// (begin-run packet 921), per-event baseline (median of early samples; this also absorbs the
-// -1329 count shift a whole DRS4 board shows in ~1.4 % of events), spike removal per DRS4 group,
-// and the trigger time of each group (50 % of its TR trace, from a line fit over the 20-80 %
+// V1742Event::begin_run(): the board's factory DRS4 calibration from the begin-run event (packet
+// 901, 902, ...: the one written for this data packet, all three speeds). Runs before 6 Nov 2026
+// have none: then fill() takes the calib_<serial>_<speed>.dat file in CALIB_DIR (serial: 921).
+// V1742Event::fill(): DRS4 calibration for the board's own FREQUENCY code, per-event baseline
+// (median of early samples; this also absorbs the -1329 count shift a whole DRS4 board shows in
+// ~1.4 % of events), spike removal per DRS4 group, and the trigger time of each group (50 % of its TR trace, from a line fit over the 20-80 %
 // edge: edge_fit_time; trig_edge_fit = false for the old two-sample CFD). Times of a channel are only
 // comparable to its OWN group's trigger: the two DRS4 boards (groups 0/1 and 2/3) are not
 // aligned (3.4 ns rms).
@@ -26,6 +28,7 @@
 #include "tb_pulse.h"
 
 #include <Event/Event.h>
+#include <Event/caen_calibration.h>
 #include <Event/caen_correction.h>
 
 #include <cmath>
@@ -50,7 +53,9 @@ struct V1742Event {
   bool despike = true;
   double trig_fraction = 0.5, trig_min_mv = -100.0;   // NIM trigger pulse is about -800 mV
   bool trig_edge_fit = true;               // TR time from a line fit over the edge (else CFD on 2 samples)
-  int serial = -1;                         // V1742 serial for the calibration file (packet 921)
+  int serial = -1;                         // V1742 serial (calibration packet, else packet 921)
+  bool any_calib_file = true;              // no calib file for the serial: take any board's for the speed
+                                           // (one board); false: raw data (several boards, each its own)
 
   // --- this event ---
   int ns = 0;                              // samples per channel
@@ -72,15 +77,19 @@ struct V1742Event {
     if (!p) return false;
     std::unique_ptr<Packet> guard(p);
     int f = p->iValue(0, "FREQUENCY");
-    if (f != calib_freq || serial != calib_serial) load_calibration(f);
-    if (cc) cc->init(p);
     ns = std::min(p->iValue(0, "SAMPLES"), MAXS);
     if (ns < 10) return false;
     freq = f;
+    ns_per_sample = f == 1 ? 0.4 : f == 2 ? 1.0 : 0.2;
+    bool from_run = run_cal && run_cal->init(p) == 0;   // fails only for a speed without a table
+    if (!from_run) {
+      if (f != calib_freq || serial != calib_serial) load_calibration(f);
+      if (cc) cc->init(p);
+    }
     for (int ch = 0; ch < NCH; ch++) {
       for (int s = 0; s < ns; s++) {
-        v[ch][s] = cc ? cc->caen_corrected(s, ch) : p->iValue(s, ch);
-        t[ch][s] = cc ? cc->caen_time(s, ch) : s * ns_per_sample;
+        v[ch][s] = from_run ? run_cal->caen_corrected(s, ch) : cc ? cc->caen_corrected(s, ch) : p->iValue(s, ch);
+        t[ch][s] = from_run ? run_cal->caen_time(s, ch) : cc ? cc->caen_time(s, ch) : s * ns_per_sample;
       }
       double b = ch < NSIG ? median(v[ch], bl_first, std::min(bl_last, ns)) : median(v[ch], 1, 21);
       for (int s = 0; s < ns; s++) v[ch][s] = (v[ch][s] - b) * ADC_TO_MV;
@@ -109,21 +118,41 @@ struct V1742Event {
   }
 
   // --- calibration ---
-  std::unique_ptr<caen_correction> cc;
+  std::unique_ptr<caen_calibration> run_cal;   // from the begin-run event (begin_run)
+  std::unique_ptr<caen_correction> cc;         // else from a calib_*.dat file (load_calibration)
   int calib_freq = -1, calib_serial = -2;
   double ns_per_sample = 0.2;
   std::string calib_file;
 
+  // begin-run event: the serial (921) and the calibration packet written for this data packet
+  void begin_run(Event *e)
+  {
+    run_cal.reset();
+    calib_freq = -1;                          // a run without one reloads the file
+    if (Packet *p = e->getPacket(921)) { serial = p->iValue(0) ; delete p ; }
+    for (int id = 901; id <= 909 && !run_cal; id++) {
+      Packet *p = e->getPacket(id);
+      if (!p) continue;
+      if (p->iValue(0, "READOUTID") == packet) {
+        run_cal.reset(new caen_calibration(p));
+        if (run_cal->isBroken()) run_cal.reset();
+        else {
+          serial = run_cal->getSerialNumber();
+          printf("tb_v1742: calibration from begin-run packet %d (serial %d, data packet %d)\n", id, serial, packet);
+        }
+      }
+      delete p;
+    }
+  }
+
   void load_calibration(int f)
   {
     static const char *speed[] = {"5G", "2G", "1G"};
-    static const double nsps[] = {0.2, 0.4, 1.0};
     calib_freq = f;
     calib_serial = serial;
     cc.reset();
     calib_file.clear();
     if (f < 0 || f > 2) { printf("tb_v1742: unknown FREQUENCY code %d - raw data, nominal 0.2 ns\n", f) ; return ; }
-    ns_per_sample = nsps[f];
     std::string dir = read_conf(repo_root() + "/db/testbench.conf")["CALIB_DIR"];
     if (dir.empty()) dir = "/scratch2/data/v1742.db";
     if (serial >= 0) {
@@ -131,7 +160,7 @@ struct V1742Event {
       snprintf(b, sizeof b, "/calib_%04d_%s.dat", serial, speed[f]);
       if (std::ifstream(dir + b)) calib_file = dir + b;
     }
-    if (calib_file.empty())   // serial unknown (no begin-run event seen): any file for this speed
+    if (calib_file.empty() && any_calib_file)   // serial unknown (no begin-run event seen): any file for this speed
       if (DIR *d = opendir(dir.c_str())) {
         std::string suffix = std::string("_") + speed[f] + ".dat";
         while (dirent *de = readdir(d)) {
@@ -141,7 +170,10 @@ struct V1742Event {
         }
         closedir(d);
       }
-    if (calib_file.empty()) { printf("tb_v1742: no %s calibration in %s - raw data\n", speed[f], dir.c_str()) ; return ; }
+    if (calib_file.empty()) {
+      printf("tb_v1742: no %s calibration for data packet %d (s/n %d) in %s - raw data\n", speed[f], packet, serial, dir.c_str());
+      return;
+    }
     cc.reset(new caen_correction(calib_file.c_str()));
     printf("tb_v1742: calibration %s\n", calib_file.c_str());
   }
@@ -217,8 +249,8 @@ struct RunInfo {
   std::string detector, text910;           // 910: detector selected when the run was taken
   int scan_id = 0, point = -1, npoints = 0;   // 911
   double target_x = NAN, target_y = NAN;   // 911 [mm]
-  double x = NAN, y = NAN;                 // 932 [mm] (else 931, whole mm)
-  bool x_whole_mm = false;                 // x, y came from 931: cut to whole mm
+  double x = NAN, y = NAN;                 // 931 [mm] (older runs: 932, else hpDIRC 931)
+  bool x_whole_mm = false;                 // x, y came from the hpDIRC 931: cut to whole mm
   std::vector<int> hv941;                  // raw 941: per unit serial + 4 x (VSET VMON ISET IMON STAT)
   bool seen = false;
 
@@ -236,8 +268,13 @@ struct RunInfo {
       delete p;
     }
     if (Packet *p = e->getPacket(921)) { serial = p->iValue(0) ; delete p ; }
-    if (Packet *p = e->getPacket(932)) { x = p->iValue(0) / 1000.0 ; y = p->iValue(1) / 1000.0 ; delete p ; }
-    else if (Packet *p = e->getPacket(931)) { y = p->iValue(0) ; x = p->iValue(1) ; x_whole_mm = true ; delete p ; }
+    // stage: 931 format 2 (2, X, Y [um]); runs before 6 Nov 2026: 932 (X, Y [um]), else the
+    // hpDIRC 931 (2 values: Y, X in whole mm)
+    Packet *p931 = e->getPacket(931);
+    if (p931 && p931->getDataLength() >= 3 && p931->iValue(0) == 2) { x = p931->iValue(1) / 1000.0 ; y = p931->iValue(2) / 1000.0 ; }
+    else if (Packet *p = e->getPacket(932)) { x = p->iValue(0) / 1000.0 ; y = p->iValue(1) / 1000.0 ; delete p ; }
+    else if (p931) { y = p931->iValue(0) ; x = p931->iValue(1) ; x_whole_mm = true ; }
+    delete p931;
     if (Packet *p = e->getPacket(941)) { for (int i = 0; i < p->getDataLength(); i++) hv941.push_back(p->iValue(i)) ; delete p ; }
   }
 

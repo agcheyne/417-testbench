@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write bench.bob, the Phoebus panel of the 417 test bench (docs/phoebus_panel_plan.md).
+"""Write bench.bob, the Phoebus panel of the 417 test bench (docs/epics.md).
 
     phoebus/make_bench_panel.py            -> phoebus/bench.bob
     phoebus/bench_panel.sh                 opens it
@@ -198,7 +198,7 @@ widget('textupdate', 1300, 6, W - 1306, 70, pv_name='N1470:ALARM_TXT', format=6,
        raw_r=rules(rule('severity', 'background_color', ['N1470:ALARM.SEVR', 'N1470:ANN_ALIVE'],
                         [('pv1!=1', colval(C['off'])), ('pv0>=2', colval(C['red'])),
                          ('pv0>=1', colval(C['orange']))])),
-       tooltip='Active alarms (written by the annunciator, n1470.sh annunciate). Grey: the annunciator is down; '
+       tooltip='Active alarms (written by the annunciator, bin/hv_annunciator.sh). Grey: the annunciator is down; '
                'the red / orange outlines below still come from the IOC.')
 
 # ---- HV table ----
@@ -417,9 +417,9 @@ for txt, pv, x, lw, vw in [('pt', 'SCAN:POINT', 12, 18, 40), ('/', 'SCAN:NPOINTS
 update(DX + 336, DY + 222, 76, 22, 'SCAN:ETA', size=9, bold=True, align=0, units=False,
        tooltip='estimated end of the scan')
 
-# which readout the V1742 reads (the active detector's cabling.txt, one slot): buttons for detectors with 2-4
-# slots (named by SLOT_NAMES in detector.conf); bench_publisher.sh rewrites cabling.txt (unlocked, stopped)
-# and the faces. DAQ:CABLED: the slot read now
+# which readout each V1742 reads (the active detector's cabling.txt, a slot per board's packet): buttons for
+# detectors with 2-4 slots (named by SLOT_NAMES in detector.conf); bench_publisher.sh rewrites cabling.txt
+# (unlocked, stopped) and the faces. DAQ:CABLED / DAQ:CABLED1: the slot board 0 / board 1 reads now
 def det_slots(d):
     dd = os.path.join(os.path.dirname(HERE), 'db/detectors', d)
     slots = sorted(set(int(l.split('#')[0].split()[0]) for l in open(os.path.join(dd, 'mapping.txt'))
@@ -433,29 +433,44 @@ def det_slots(d):
     return [(sl, names.get(sl, 'slot %d' % sl)) for sl in slots]
 
 
-label(DX + 12, DY + 252, 46, 24, 'cabled', size=9, fg='dim')
-update(DX + 58, DY + 252, 110, 24, 'DAQ:CABLED', size=10, bold=True, align=0, alarm=False,
-       tooltip='the readout (mapping.txt slot) the V1742 reads now: the active detector\'s cabling.txt')
-for d in sorted(x for x in os.listdir(os.path.join(os.path.dirname(HERE), 'db/detectors')) if not x.startswith('_')):
-    sl = det_slots(d)
-    if not 2 <= len(sl) <= 4:
-        continue
-    bw = (DW - 184) // len(sl)
-    for k, (slot, name) in enumerate(sl):
-        p = dict(raw_a='<actions execute_as_one="true"><action type="write_pv"><pv_name>DAQ:CMD</pv_name>'
-                       '<value>cabling %d</value><description>cabled: %s</description></action></actions>'
-                       % (slot, escape(name)),
-                 text=name, raw_f=font(9, True), raw_bg=color('background_color', C['unused']),
-                 raw_fg=color('foreground_color', C['text']), enabled='false', visible='false',
-                 tooltip='%s: the V1742 now reads %s (mapping.txt slot %d): rewrites db/detectors/%s/cabling.txt '
-                         'for the next runs and redraws the faces (unlocked, rcdaq stopped)' % (d, name, slot, d),
-                 raw_r=rules(enabled_rule(STOPPED, STOPPED_EXP),
-                             rule('vis', 'visible', ['DAQ:ACTIVE_DET'], [('pvStr0=="%s"' % d, 'true')]),
-                             rule('now', 'background_color', ['DAQ:CABLED'],
-                                  [('pvStr0=="%s"' % name, colval(C['blue']))]),
-                             rule('nowfg', 'foreground_color', ['DAQ:CABLED'],
-                                  [('pvStr0=="%s"' % name, colval(C['white']))])))
-        widget('action_button', DX + 172 + k * bw, DY + 252, bw - 4, 24, version='3.0.0', **p)
+# one row per V1742: board 0 (packet 2000, s/n 49), board 1 (packet 2001, s/n 51240); "none" = not read (the
+# other one alone; the publisher refuses both). The first board read gives the trigger. Adding or dropping a
+# board also reruns daq/setup_rcdaq.sh
+BOARDS = [(2000, 'DAQ:CABLED', 'board 0', 's/n 49, packet 2000; none = not read, board 1 alone'),
+          (2001, 'DAQ:CABLED1', 'board 1', 's/n 51240, packet 2001; none = not read, board 0 alone')]
+NONE_W = 36
+for b, (pk, pv, lab, about) in enumerate(BOARDS):
+    y = DY + 252 + 28 * b
+    label(DX + 12, y, 46, 24, lab, size=9, fg='dim', tooltip='V1742 %s' % about)
+    update(DX + 58, y, 90, 24, pv, size=10, bold=True, align=0, alarm=False,
+           tooltip='the readout (mapping.txt slot) V1742 %s (%s) reads now: the active detector\'s cabling.txt'
+                   % (lab, about))
+    for d in sorted(x for x in os.listdir(os.path.join(os.path.dirname(HERE), 'db/detectors')) if not x.startswith('_')):
+        sl = det_slots(d)
+        if not 2 <= len(sl) <= 4:
+            continue
+        x0, bw = DX + 152, (DW - 164 - NONE_W) // len(sl)
+        sl = [('-', 'none')] + sl
+        for slot, name in sl:
+            w = NONE_W if slot == '-' else bw
+            what = ('%s is not read (the other board alone)' % lab if slot == '-' else
+                    '%s reads %s (mapping.txt slot %d)' % (lab, name, slot))
+            p = dict(raw_a='<actions execute_as_one="true"><action type="write_pv"><pv_name>DAQ:CMD</pv_name>'
+                           '<value>cabling %d %s</value><description>%s cabled: %s</description></action></actions>'
+                           % (pk, slot, lab, escape(name)),
+                     text=name, raw_f=font(9, True), raw_bg=color('background_color', C['unused']),
+                     raw_fg=color('foreground_color', C['text']), enabled='false', visible='false',
+                     tooltip='%s: V1742 %s from the next run on: rewrites db/detectors/%s/cabling.txt and redraws '
+                             'the faces%s (unlocked, rcdaq stopped)'
+                             % (d, what, d, '; adding or dropping a board also sets rcdaq up again'),
+                     raw_r=rules(enabled_rule(STOPPED, STOPPED_EXP),
+                                 rule('vis', 'visible', ['DAQ:ACTIVE_DET'], [('pvStr0=="%s"' % d, 'true')]),
+                                 rule('now', 'background_color', [pv],
+                                      [('pvStr0=="%s"' % name, colval(C['blue']))]),
+                                 rule('nowfg', 'foreground_color', [pv],
+                                      [('pvStr0=="%s"' % name, colval(C['white']))])))
+            widget('action_button', x0, y, w - 4, 24, version='3.0.0', **p)
+            x0 += w
 
 # ---- detector face with the laser (laser_face_small_DET.bob, from make_laser_face.py): the active detector's
 # (DAQ:ACTIVE_DET, so it follows the setup picker), or another one picked to look at (FACE_VIEW, this window

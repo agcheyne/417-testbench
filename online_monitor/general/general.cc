@@ -607,7 +607,7 @@ int pinit()
 static void begin_run(Event *e)
 {
   info.parse(e);
-  ev.serial = info.serial;   // calibration file of this run's digitiser
+  ev.begin_run(e);   // serial and calibration of this run's digitiser
   if (!db_ok || (!info.detector.empty() && info.detector != db.detector)) {
     tb::Db d;
     bool ok = d.load(info.detector);

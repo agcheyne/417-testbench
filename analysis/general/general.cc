@@ -13,7 +13,7 @@
 // pulses after the main pulse. All times are relative to the channel's OWN group trigger:
 // groups 0/1 and 2/3 sit on different DRS4 chips whose clocks are not aligned (3.4 ns rms).
 // The begin-run packets give the detector (910 -> db mapping, for the pixel map), the scan
-// point (911) and the stage position (932, else 931).
+// point (911) and the stage position (931; older runs 932, else the hpDIRC 931).
 // Helpers: lib/tb_pulse.h (waveform), lib/tb_spe.h (gain fit), lib/tb_db.h (database).
 
 #include <iostream>
@@ -118,7 +118,7 @@ int pinit()
 static void begin_run(Event *e)
 {
   info.parse(e);
-  ev.serial = info.serial;   // calibration file of this run's digitiser
+  ev.begin_run(e);   // serial and calibration of this run's digitiser
   if (!db_ok || (!info.detector.empty() && info.detector != db.detector)) {
     db_ok = db.load(info.detector);
     printf("general: run %d, detector %s%s\n", info.run, db_ok ? db.detector.c_str() : "unknown",
