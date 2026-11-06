@@ -10,13 +10,11 @@
 - [ ] HRPPD #26 first light (4 Nov): cable HV as db/detectors/HRPPD_26/hv.conf (A0-3 MCP electrodes, B0 PC), fill V1742 slot (cabling.txt) + STAGE_X0/Y0_MM
 - [ ] Group HV off (IOC n1470_group.db): test a real trip once on a dummy load before trusting it
 - [ ] Pearson chi2/ndf column in gain fit tables
-- [ ] `testbench.sh check`: accept 11-column hv.conf (TRIP, 4 Nov)
 - [ ] Photek remount: hv.conf unit/ch/vset, octant in cabling.txt, new STAGE_X0/Y0_MM
 - [ ] fit_hv_scan.sh auto window picks 61 ns pickup on readout 1 (use `--window 24.1:27.3` until fixed)
-- [ ] Dark-count tool into repo (draft: scratchpad dark_count.cc, runs 6887-6896)
 - [ ] Readout-1 column 0 (ch14-17) dark 3-6x, big single-pad pulses (17-21 mV vs SPE 7.5), lowest gain: lights/cloth test, readout-0 dark run, rate vs HV
 - [ ] Analysis output to /scratch2 only if the /home file quota still bites (the fits' parts folders are removed after each fit since 6 Nov)
-- [ ] 2nd V1742 (s/n 51240, node 1): analysis to decode 2001 and take the calibration from packets 901/902 (caen_calibration) instead of calib_*.dat (none for 51240)
+- [ ] 2nd V1742 (s/n 51240, node 1): the analyses to decode packet 2001 too (only online_monitor/waveforms does; the calibration already comes from packets 901/902, 6 Nov)
 - [ ] Sync cable between the two V1742s: clocks drift 0.7 ppm without one (TTT0-TTT1 grows ~85 counts/s; start chain node 0 TRG-OUT -> node 1 S-IN already fitted 6 Nov)
 - [ ] 2-board analysis sync check: flag events where TTT0-TTT1 jumps by ~a period from the previous event (not a fixed half-period cut: 0.7 ppm drift reaches 0.5 ms after ~11 min)
 - [ ] Old hpDIRC/rcdaq_scripts libs (glasgow, sigma_hits) built against the pre-5-Nov libEvent: rebuild before use (Packet vtable changed)
@@ -38,5 +36,6 @@
 - HRPPD HV: `testbench.sh use detector HRPPD_26`, `hv-load --yes`, `hv-on --box-safe`, then `hv-mcp MCP_V PC_GAP --wait --yes` (gap -10 = MCP-only dark); `hv-off`
 - Detector face + laser (Phoebus): `phoebus/laser_face.sh` (on the bench panel too); after a db change: `phoebus/make_laser_face.py` then `phoebus/make_bench_panel.py`
 - Hit time vs position (any scan): `analysis/time_xy/time_xy.sh <scan> --pad CH` (Photonis before run 6902: `--x0 32.6`)
-- Timing map (1 mm scan): `root -b -q 'plot_timing_map.C+("<scan>_timing.csv", "<out>")'` (scratchpad for now)
+- Timing map (xy scan): `analysis/timing_map/timing_map.sh <scan>` (Photonis readout 1, 31 Oct - 2 Nov: `--mask "0 3 4 5 6"`)
+- Dark counts (laser off): `analysis/dark_count/dark_count.sh RUN ...` (the 1 Nov Photonis runs: `6887 ... 6896 --mask "0 3 4 5 6"`)
 - Full map (lin + log, with/without pads; later scans win on overlap): `root -b -q 'analysis/gain_hv/stitch_gain_map.C+("<r0>_gain_map.csv:0s <r1>_gain_map.csv:2 <join>_gain_map.csv:3:join@0.92,0 <patch>_gain_map.csv:3:patch@0.92,0", "<out>")'` (2 Nov scans shifted +0.92 mm in x)

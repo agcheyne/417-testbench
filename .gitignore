@@ -21,6 +21,8 @@ MsgLog.txt
 *.evt
 analysis/time_xy/time_xy_point
 analysis/check_align/check_align
+analysis/dark_count/dark_count
+analysis/timing_map/timing_point
 
 # third-party vendor material (LabVIEW, JY/Hamamatsu files): kept on disk, not in the repository
 from_GLADD/
