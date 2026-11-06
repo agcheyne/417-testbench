@@ -24,3 +24,6 @@ analysis/check_align/check_align
 
 # third-party vendor material (LabVIEW, JY/Hamamatsu files): kept on disk, not in the repository
 from_GLADD/
+
+# editor workspace (lists folders outside the repository)
+*.code-workspace

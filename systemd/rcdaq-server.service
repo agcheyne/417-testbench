@@ -10,7 +10,7 @@ After=ioc-n1470.service ioc-pilas.service ioc-thorlabs.service
 [Service]
 Type=simple
 EnvironmentFile=%h/417-testbench/systemd/bench.env
-WorkingDirectory=%h/hpDIRC
+WorkingDirectory=%h/417-testbench
 ExecStart=%h/softwarerepo/install/bin/rcdaq_server
 ExecStartPost=-%h/417-testbench/systemd/rcdaq_start_setup.sh
 ExecStop=%h/417-testbench/systemd/rcdaq_stop.sh

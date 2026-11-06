@@ -1,4 +1,4 @@
-// Live gain curve of an HV scan (bin/scan_hv.sh) while follow_hv_scan.sh fits its runs.
+// Live gain curve of an HV scan (scans/scan_hv.sh) while follow_hv_scan.sh fits its runs.
 // Left: gain vs HV (log), the spot (black, with an exponential fit once there are 3 points: the
 // voltage that doubles the gain, and the gain at 2100 V) and the three channels with the most light
 // at the latest point; the points taken and not fitted yet are counted in the title. Right: the latest

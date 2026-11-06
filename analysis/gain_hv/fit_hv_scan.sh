@@ -1,6 +1,6 @@
 #! /bin/bash
 #
-# Gain vs HV of a finished HV scan (bin/scan_hv.sh): single-photoelectron fit of every run,
+# Gain vs HV of a finished HV scan (scans/scan_hv.sh): single-photoelectron fit of every run,
 # then gain and mu vs HV. Only reads the data; the results go into the scan's folder.
 #
 #   analysis/gain_hv/fit_hv_scan.sh SCAN [options]
@@ -68,7 +68,7 @@ NAME=$(basename "$DIR")
 PREFIX=$DIR/$NAME
 LIST=${PREFIX}_runs.txt
 LOG=${PREFIX}_fits.log
-[ -r "$LIST" ] || tb_die "no $LIST: is $DIR an HV scan (bin/scan_hv.sh)?"
+[ -r "$LIST" ] || tb_die "no $LIST: is $DIR an HV scan (scans/scan_hv.sh)?"
 NRUNS=$(grep -c . "$LIST")
 [ "$NRUNS" -ge 1 ] || tb_die "$LIST is empty: the scan took no runs"
 while read -r f v ; do

@@ -1,6 +1,6 @@
 #! /bin/bash
 #
-# Hit time vs laser position of a finished xy scan or x line (bin/scan_xy.sh): where in x-y each part of a
+# Hit time vs laser position of a finished xy scan or x line (scans/scan_xy.sh): where in x-y each part of a
 # channel's time spectrum comes from (the direct laser peak, its halo, the later shoulder and bumps), and where
 # the peak arrives first. Only reads the data; plots go into <scan>_time_xy/ in the scan's folder.
 # First done on the Photonis 0.4 mm scan of 31 Oct 2026 (pad centre 30-60 ps earlier than its edges).

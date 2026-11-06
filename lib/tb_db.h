@@ -2,7 +2,7 @@
 //
 //   tb::Db db;
 //   db.load();                          // detector selected with testbench.sh use detector
-//   db.load("HRPPD_tile66");            // or a named one, e.g. from tb::detector_in_910()
+//   db.load("HRPPD_26");            // or a named one, e.g. from tb::detector_in_910()
 //   int row, col;
 //   if (db.pixel(2000, ch, row, col)) ...   // packet + channel -> anode pixel (mapping + cabling)
 //   db.num("PITCH_X_MM", 0)             // any detector.conf value
