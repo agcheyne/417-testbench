@@ -1,6 +1,7 @@
 // Shared by time_xy_plots.C and peak_time_map.C: the scan's points, the time_xy_point parts, the
 // channel list ("pad:CH" = CH and its 8 neighbours, from the pixel of each input stored in the parts),
 // the laser peak and per-channel alignment, time slices relative to the peak, and the pad grid.
+// The x-y maps are drawn with stage y down, as the bench face (tb_ydown.h).
 #ifndef TIME_XY_COMMON_H
 #define TIME_XY_COMMON_H
 #include <TFile.h>
@@ -9,6 +10,7 @@
 #include <TH2F.h>
 #include <TLine.h>
 #include <TSystem.h>
+#include "../../lib/tb_ydown.h"
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -69,14 +71,16 @@ struct Geo {
   bool ok() const { return !std::isnan(x0) && px > 0 && ncols > 0; }
   double x(int col) const { return x0 + xdir * px * col; }   // stage position of a pixel's centre
   double y(int row) const { return y0 + ydir * py * row; }
-  // dashed pad edges inside the frame (x only for an x line: y0 == y1)
+  // dashed pad edges inside the frame: on an x-y map (drawn y down, tb::draw_y_down) both; vertical_only
+  // where the plot's y is not the stage's (an x line): x only, ya-yb as they are
   void draw(double xa, double xb, double ya, double yb, bool vertical_only = false) const
   {
     if (!ok()) return;
     TLine l; l.SetLineColor(kGray + 1); l.SetLineStyle(2); l.SetLineWidth(1);
-    for (int k = -ncols - 1; k <= ncols; k++) { double x = x0 + px * (k + 0.5) ; if (x > xa && x < xb) l.DrawLine(x, ya, x, yb) ; }
+    double la = vertical_only ? ya : tb::y_down(yb), lb = vertical_only ? yb : tb::y_down(ya);
+    for (int k = -ncols - 1; k <= ncols; k++) { double x = x0 + px * (k + 0.5) ; if (x > xa && x < xb) l.DrawLine(x, la, x, lb) ; }
     if (vertical_only) return;
-    for (int k = -nrows - 1; k <= nrows; k++) { double y = y0 + py * (k + 0.5) ; if (y > ya && y < yb) l.DrawLine(xa, y, xb, y) ; }
+    for (int k = -nrows - 1; k <= nrows; k++) { double y = y0 + py * (k + 0.5) ; if (y > ya && y < yb) l.DrawLine(xa, tb::y_down(y), xb, tb::y_down(y)) ; }
   }
 };
 

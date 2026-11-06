@@ -24,6 +24,8 @@
 // columns swapped; the better one gives the stage position of pixel (0,0), the pitch and its
 // sign (mirror), compared with STAGE_X0_MM / STAGE_Y0_MM / PITCH / STAGE_*_DIR in the db.
 // Channels whose centroid is more than 0.4 pitch from the fit are listed: wrong mapping or cabling.
+//
+// The plots are drawn as the bench face: x to the right, stage y DOWN, (0,0) at the top left (tb_ydown.h).
 
 #include <iostream>
 #include <pmonitor/pmonitor.h>
@@ -31,6 +33,7 @@
 
 #include "tb_db.h"
 #include "tb_v1742.h"
+#include "tb_ydown.h"
 
 #include <TBox.h>
 #include <TCanvas.h>
@@ -382,8 +385,8 @@ void make_maps(const char *points_file, const char *detector)
   auto *cv = new TCanvas("c_scan_maps", "scan maps", 1300, 600);
   cv->Divide(2, 1);
   gStyle->SetOptStat(0);
-  cv->cd(1) ; h_best->Draw("colz text");
-  cv->cd(2) ; h_sum->Draw("colz");
+  cv->cd(1) ; tb::draw_y_down(h_best, "colz text");
+  cv->cd(2) ; tb::draw_y_down(h_sum, "colz");
 }
 
 void draw_channel_map(int ch)
@@ -391,25 +394,25 @@ void draw_channel_map(int ch)
   if (!occ_map.count(ch)) { printf("scan_map: no map for ch %d (make_maps first)\n", ch) ; return ; }
   auto *c = new TCanvas(Form("c_occ_ch%02d", ch), Form("ch %d", ch), 700, 600);
   c->SetRightMargin(0.15);
-  occ_map[ch]->Draw("colz");
+  tb::draw_y_down(occ_map[ch], "colz");
 }
 
 // the pixels of the db map that overlap the plotted range, as outlines labelled with their channel;
-// only == -1: all of them, else only that channel's pixel
+// only == -1: all of them, else only that channel's pixel. h: the y-down copy drawn (tb::draw_y_down)
 static void draw_pixel_grid(TH2 *h, double x0, double y0, int only, int color)
 {
   double xl = h->GetXaxis()->GetXmin(), xh = h->GetXaxis()->GetXmax();
-  double yl = h->GetYaxis()->GetXmin(), yh = h->GetYaxis()->GetXmax();
+  double yl = tb::y_down(h->GetYaxis()->GetXmax()), yh = tb::y_down(h->GetYaxis()->GetXmin());
   double hp = 0.5 * geo.pitch;
   for (auto &e : ch_pixel) {
     if (only >= 0 && e.first != only) continue;
     double cx = x0 + geo.dx * e.second.second * geo.pitch, cy = y0 + geo.dy * e.second.first * geo.pitch;
     double bx0 = max(xl, cx - hp), bx1 = min(xh, cx + hp), by0 = max(yl, cy - hp), by1 = min(yh, cy + hp);
     if (bx0 >= bx1 || by0 >= by1) continue;
-    auto *b = new TBox(bx0, by0, bx1, by1);
+    auto *b = new TBox(bx0, tb::y_down(by1), bx1, tb::y_down(by0));
     b->SetFillStyle(0) ; b->SetLineColor(color) ; b->SetLineStyle(2) ; b->SetLineWidth(2) ; b->Draw();
     if (only < 0) {
-      auto *t = new TLatex(bx0 + 0.04 * geo.pitch, by1 - 0.04 * geo.pitch, Form("map %d", e.first));
+      auto *t = new TLatex(bx0 + 0.04 * geo.pitch, tb::y_down(by0) - 0.04 * geo.pitch, Form("map %d", e.first));
       t->SetTextAlign(13) ; t->SetTextSize(0.028) ; t->SetTextColor(color) ; t->Draw();
     }
   }
@@ -433,17 +436,17 @@ void save_plots(const char *prefix, double x0, double y0)
   h_best_occ->SetTitle("brightest channel (number), occupancy above background (colour);x [mm];y [mm];occupancy - background");
   h_best_occ->SetMinimum(-1e-9);   // zero bins painted too
   h_best_occ->GetZaxis()->SetTitleOffset(1.5);
-  h_best_occ->Draw("colz");
+  TH2 *hd = tb::draw_y_down(h_best_occ, "colz");
   for (int i = 1; i <= h_best->GetNbinsX(); i++)
     for (int j = 1; j <= h_best->GetNbinsY(); j++) {
       int ch = (int)h_best->GetBinContent(i, j);
       bool lit = false;
       for (auto &c : cens) if (c.ch == ch && h_best_occ->GetBinContent(i, j) >= 0.5 * (c.peak - c.bkg)) lit = true;
       if (!lit) continue;
-      auto *t = new TLatex(h_best->GetXaxis()->GetBinCenter(i), h_best->GetYaxis()->GetBinCenter(j), Form("%d", ch));
+      auto *t = new TLatex(h_best->GetXaxis()->GetBinCenter(i), tb::y_down(h_best->GetYaxis()->GetBinCenter(j)), Form("%d", ch));
       t->SetTextAlign(22) ; t->SetTextSize(0.04) ; t->SetTextColor(kWhite) ; t->Draw();
     }
-  if (grid) draw_pixel_grid(h_best_occ, x0, y0, -1, kRed);
+  if (grid) draw_pixel_grid(hd, x0, y0, -1, kRed);
 
   cv->cd(2);
   double fx0 = h_best_occ->GetXaxis()->GetXmin(), fx1 = h_best_occ->GetXaxis()->GetXmax();
@@ -454,20 +457,21 @@ void save_plots(const char *prefix, double x0, double y0)
       fx0 = min(fx0, ex - 1) ; fx1 = max(fx1, ex + 1) ; fy0 = min(fy0, ey - 1) ; fy1 = max(fy1, ey + 1);
     }
   delete gROOT->FindObject("frame");
-  auto *fr = new TH2F("frame", "", 10, fx0, fx1, 10, fy0, fy1);
-  auto *scanned = new TBox(h_best_occ->GetXaxis()->GetXmin(), h_best_occ->GetYaxis()->GetXmin(),
-                           h_best_occ->GetXaxis()->GetXmax(), h_best_occ->GetYaxis()->GetXmax());
+  auto *fr = new TH2F("frame", "", 10, fx0, fx1, 10, tb::y_down(fy1), tb::y_down(fy0));
+  auto *scanned = new TBox(h_best_occ->GetXaxis()->GetXmin(), tb::y_down(h_best_occ->GetYaxis()->GetXmax()),
+                           h_best_occ->GetXaxis()->GetXmax(), tb::y_down(h_best_occ->GetYaxis()->GetXmin()));
   fr->SetTitle(Form("centroid (filled) and where the map puts the channel (open), hatched = scanned%s;x [mm];y [mm]", grid ? "" : ", no db position"));
   fr->Draw("axis");
+  tb::y_down_axis(fr);
   scanned->SetFillColor(kGray) ; scanned->SetFillStyle(3003) ; scanned->Draw();
   if (grid) draw_pixel_grid(fr, x0, y0, -1, kGray + 1);
   for (auto &c : cens) {
-    auto *m = new TMarker(c.x, c.y, 20) ; m->SetMarkerColor(kBlue + 1) ; m->SetMarkerSize(1.4) ; m->Draw();
-    auto *t = new TLatex(c.x, c.y + 0.35, Form("%d", c.ch)) ; t->SetTextAlign(21) ; t->SetTextSize(0.035) ; t->SetTextColor(kBlue + 1) ; t->Draw();
+    auto *m = new TMarker(c.x, tb::y_down(c.y), 20) ; m->SetMarkerColor(kBlue + 1) ; m->SetMarkerSize(1.4) ; m->Draw();
+    auto *t = new TLatex(c.x, tb::y_down(c.y) + 0.35, Form("%d", c.ch)) ; t->SetTextAlign(21) ; t->SetTextSize(0.035) ; t->SetTextColor(kBlue + 1) ; t->Draw();
     if (grid && ch_pixel.count(c.ch)) {
       double ex = x0 + geo.dx * c.col * geo.pitch, ey = y0 + geo.dy * c.row * geo.pitch;
-      auto *l = new TLine(c.x, c.y, ex, ey) ; l->SetLineColor(kRed) ; l->Draw();
-      auto *o = new TMarker(ex, ey, 24) ; o->SetMarkerColor(kRed) ; o->SetMarkerSize(1.4) ; o->Draw();
+      auto *l = new TLine(c.x, tb::y_down(c.y), ex, tb::y_down(ey)) ; l->SetLineColor(kRed) ; l->Draw();
+      auto *o = new TMarker(ex, tb::y_down(ey), 24) ; o->SetMarkerColor(kRed) ; o->SetMarkerSize(1.4) ; o->Draw();
     }
   }
   if (grid) {
@@ -487,8 +491,8 @@ void save_plots(const char *prefix, double x0, double y0)
       h->SetTitle(Form("ch %d (map pixel %d,%d);x [mm];y [mm];occupancy", cens[i].ch, cens[i].row, cens[i].col));
       h->SetMinimum(-1e-9);
       h->GetZaxis()->SetTitleOffset(1.6);
-      h->Draw("colz");
-      if (grid) draw_pixel_grid(h, x0, y0, cens[i].ch, kRed);
+      TH2 *hd = tb::draw_y_down(h, "colz");
+      if (grid) draw_pixel_grid(hd, x0, y0, cens[i].ch, kRed);
     }
     cc->SaveAs(Form("%s_channels.png", prefix));
   }

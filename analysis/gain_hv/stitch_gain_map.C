@@ -1,6 +1,7 @@
 // One gain map of the whole Photonis from the maps of its two readout halves (fit_gain_map.sh's
 // <scan>_gain_map.csv, one per half): the spot gain of every point with a resolved photoelectron peak
-// (peak = 1, outliers already cut), on one stage-coordinate grid, one colour scale: <out>.png, and
+// (peak = 1, outliers already cut), on one stage-coordinate grid (stage y down, as the bench face), one
+// colour scale: <out>.png, and
 // <out>_pads.png with the pads drawn over it; <out>_log.png and <out>_pads_log.png the same with a log
 // colour scale from zmin_log. The pad grid, at the given pitch, is placed by the pad
 // boundaries in the data: every pair of neighbouring scan points (1 mm apart) whose brightest pads (the
@@ -29,6 +30,7 @@
 #include "TStyle.h"
 #include "TSystem.h"
 #include "TMath.h"
+#include "../../lib/tb_ydown.h"
 
 void stitch_gain_map(const char *inputs, const char *prefix, double zmax = 2.2e6, double pitch = 6.5, double zmin_log = 0.5e6,
                      int grid_inputs = 0)
@@ -138,7 +140,7 @@ void stitch_gain_map(const char *inputs, const char *prefix, double zmax = 2.2e6
     hg->SetMinimum(lz ? zmin_log / 1e6 : 0) ; hg->GetZaxis()->SetMoreLogLabels(lz) ; hg->GetZaxis()->SetNoExponent(lz);
     c->SetRightMargin(0.15) ; c->SetLeftMargin(0.10) ; c->SetTopMargin(0.105) ; c->SetBottomMargin(0.09);
     hg->GetZaxis()->SetTitleOffset(1.1) ; hg->GetYaxis()->SetTitleOffset(1.2);
-    hg->Draw("COLZ");
+    tb::draw_y_down(hg, "COLZ");
     TLatex t;
     t.SetNDC() ; t.SetTextSize(0.028);
     t.DrawLatex(0.10, 0.95, Form("Photonis gain at 2100 V, %zu scans (%zu points, 1 mm)", slots.size(), best.size()));
@@ -159,8 +161,8 @@ void stitch_gain_map(const char *inputs, const char *prefix, double zmax = 2.2e6
         double gx = gx0 + pitch * (k - 0.5), gy = gy0 + pitch * (k - 0.5);
         double ylo = std::max(y0, gy0 - pitch / 2), yhi = std::min(y1, gy0 + 7.5 * pitch);
         double xlo = std::max(x0, gx0 - pitch / 2), xhi = std::min(x1, gx0 + 7.5 * pitch);
-        if (gx >= x0 && gx <= x1) ln.DrawLine(gx, ylo, gx, yhi);
-        if (gy >= y0 && gy <= y1) ln.DrawLine(xlo, gy, xhi, gy);
+        if (gx >= x0 && gx <= x1) ln.DrawLine(gx, tb::y_down(ylo), gx, tb::y_down(yhi));
+        if (gy >= y0 && gy <= y1) ln.DrawLine(xlo, tb::y_down(gy), xhi, tb::y_down(gy));
       }
       // every pad once: red with the half whose points fill it, else grey with the first half that reads it
       // (dead input or no light)
@@ -177,7 +179,7 @@ void stitch_gain_map(const char *inputs, const char *prefix, double zmax = 2.2e6
           if (who.count(rc) && !lit) continue;
           if (!labelled.insert(rc).second) continue;
           l.SetTextColor(lit ? kRed + 2 : kGray + 1);
-          l.DrawLatex(x, y + 0.30 * pitch, in < 0 ? Form("R%zu ?", h) : Form("R%zu ch%d", h, in));
+          l.DrawLatex(x, tb::y_down(y) + 0.30 * pitch, in < 0 ? Form("R%zu ?", h) : Form("R%zu ch%d", h, in));
         }
     }
     c->SaveAs(Form("%s%s%s.png", prefix, g ? "_pads" : "", lz ? "_log" : ""));

@@ -1,6 +1,6 @@
 // Live view of a gain map while fit_gain_map.sh --follow works through a scan.
-// Left: the spot gain (or mu) of every point fitted so far, on the scan's grid (grey: taken, not yet
-// fitted; red ring: the latest fit). Right: the latest point's spot charge spectrum with its
+// Left: the spot gain (or mu) of every point fitted so far, on the scan's grid, stage y down as the bench
+// face (grey: taken, not yet fitted; red ring: the latest fit). Right: the latest point's spot charge spectrum with its
 // single-photoelectron fit (tb::fit_spe, as gain_hv, redone on the stored spectrum: the chunk files
 // keep only the parameters). Points with no spot fit stay blank. Redraws every `every` s and writes
 // <scan>_live.png in the scan's folder each time, so it can be looked at remotely. See also live_hv_curve.C.
@@ -18,6 +18,7 @@
 #include "TTimer.h"
 #include "TROOT.h"
 #include "live_common.h"
+#include "../../lib/tb_ydown.h"
 
 namespace live {
 
@@ -99,16 +100,16 @@ void update()
   hmap->SetTitle(Form("spot %s: %zu of %zu points fitted (%d usable), scan %s, %s;stage x [mm];stage y [mm]",
                       zvar.c_str(), done.size(), run2pt.size(), nusable, ended ? "ended" : "running", now_hms().c_str()));
   hmap->SetStats(false);
-  hmap->Draw("COLZ");
+  tb::draw_y_down(hmap, "COLZ");
   for (auto &w : waiting) {
-    auto *b = new TBox(w.first - dx / 2, w.second - dy / 2, w.first + dx / 2, w.second + dy / 2);
+    auto *b = new TBox(w.first - dx / 2, tb::y_down(w.second) - dy / 2, w.first + dx / 2, tb::y_down(w.second) + dy / 2);
     b->SetFillColor(kGray);
     b->Draw();
     trash.push_back(b);
   }
   if (newest_run >= 0) {
     auto &p = run2pt[newest_run];
-    auto *m = new TMarker(num(p, "x_mm"), num(p, "y_mm"), 24);
+    auto *m = new TMarker(num(p, "x_mm"), tb::y_down(num(p, "y_mm")), 24);
     m->SetMarkerColor(kRed) ; m->SetMarkerSize(2.5);
     m->Draw();
     trash.push_back(m);

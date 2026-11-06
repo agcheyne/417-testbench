@@ -1,5 +1,5 @@
 // Animated GIF of a finished gain map being taken: the spot gain (or mu) of the usable fits fills the
-// scan's grid in the order the points were taken (red ring: the newest), one frame per `step` points,
+// scan's grid (stage y down, as the bench face) in the order the points were taken (red ring: the newest), one frame per `step` points,
 // on the colour scale of the final map (2-98 % of its points), and the full map held at the end. Next to
 // it (spectrum = true) the newest point's spot charge spectrum with its single-photoelectron fit, as
 // live_gain_map.C shows it. Reads the scan's CSV, fit_gain_map.sh's <scan>_gain_map.csv and, for the
@@ -16,6 +16,7 @@
 #include "TStyle.h"
 #include "TROOT.h"
 #include "live_common.h"
+#include "../../lib/tb_ydown.h"
 
 void gain_map_gif(const char *scan, const char *z = "gain", int frames = 60, int delay_cs = 10, bool spectrum = true)
 {
@@ -114,8 +115,8 @@ void gain_map_gif(const char *scan, const char *z = "gain", int frames = 60, int
     if ((i + 1) % step && !last) continue;
     h->SetTitle(Form("%s: spot %s, point %zu of %zu;stage x [mm];stage y [mm]", name.c_str(), z, i + 1, pts.size()));
     c->cd(1);
-    h->Draw("COLZ");
-    if (!last) { m->SetX(num(p, "target_x_mm")) ; m->SetY(num(p, "target_y_mm")) ; m->Draw() ; }
+    tb::draw_y_down(h, "COLZ");
+    if (!last) { m->SetX(num(p, "target_x_mm")) ; m->SetY(tb::y_down(num(p, "target_y_mm"))) ; m->Draw() ; }
     if (spectrum) {
       for (auto *o : trash) delete o;
       trash.clear();

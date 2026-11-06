@@ -28,6 +28,7 @@ void draw_channel_map(int ch);
 void save_maps(const char *filename = "scan_maps.root");
 // PNGs: <prefix>_overview.png (best channel per point with the map's pixel grid; centroids against
 // where the map puts each channel) and <prefix>_channels.png (each lit channel's map and its pixel).
+// All plots are drawn as the bench face: stage y DOWN, (0,0) at the top left.
 // x0_mm / y0_mm: draw the grid with pixel (0,0) there instead of the db's STAGE_X0_MM / STAGE_Y0_MM
 void save_plots(const char *prefix = "scan", double x0_mm = NAN, double y0_mm = NAN);
 

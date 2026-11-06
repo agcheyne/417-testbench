@@ -7,7 +7,8 @@
 //   <out>_spectrum.png             hits per event per point vs time, all points, slices marked
 //   <out>_time_vs_x.png (_zoom)    time vs laser x for the points on the first channel's pad row (all, for an x line);
 //   <out>_time_vs_y.png (_zoom)    time vs laser y on its pad column (x-y scans); zoom = peak -2 to +4 ns
-//   <out>_xy_slices.png            x-y scans: hits per event per point in each slice; more than 6 slices in a grid of
+//   <out>_xy_slices.png            x-y scans: hits per event per point in each slice (stage y down, as the bench
+//                                  face); more than 6 slices in a grid of
 //                                  small maps, each on its own log scale (2 decades), sparse ones in merged bins
 //   <out>_x_slices.png             x lines: hits per event vs x per slice (one plot, or one panel per slice for > 6)
 //   <out>_x_slices_scaled.png      x lines, > 6 slices: x vs slice time, each slice scaled to its own maximum
@@ -196,7 +197,7 @@ void time_xy_plots(const char *scan_csv, const char *parts, const char *out, con
     for (size_t k = 0; k < win.size(); k++) {
       c3.cd(k + 1); gPad->SetRightMargin(0.15); gPad->SetLogz();
       double mx = xy[k]->GetMaximum();
-      xy[k]->SetMinimum(std::max(mx * 1e-3, 1e-6)); xy[k]->Draw("colz");
+      xy[k]->SetMinimum(std::max(mx * 1e-3, 1e-6)); tb::draw_y_down(xy[k], "colz");
       geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
     }
     c3.SaveAs(Form("%s_xy_slices.png", out));
@@ -211,7 +212,7 @@ void time_xy_plots(const char *scan_csv, const char *parts, const char *out, con
       h->SetMinimum(h->GetMaximum() * 1e-2);   // two decades per panel
       for (auto *a : {h->GetXaxis(), h->GetYaxis(), h->GetZaxis()}) a->SetLabelSize(0.05);
       gStyle->SetTitleFontSize(0.07);
-      h->Draw("colz");
+      tb::draw_y_down(h, "colz");
       geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
     }
     c7.SaveAs(Form("%s_xy_slices.png", out));

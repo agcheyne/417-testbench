@@ -75,11 +75,11 @@ void peak_time_map(const char *scan_csv, const char *parts, const char *out, con
   std::sort(meds.begin(), meds.end());
   double mlo = meds.empty() ? t0 : std::floor(meds[meds.size() / 20] / 0.05) * 0.05;
   TCanvas c("c", "", 2100, 650); c.Divide(3, 1);
-  c.cd(1); gPad->SetRightMargin(0.16); gPad->SetLogz(); hits->Draw("colz"); geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
+  c.cd(1); gPad->SetRightMargin(0.16); gPad->SetLogz(); tb::draw_y_down(hits, "colz"); geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
   c.cd(2); gPad->SetRightMargin(0.18);
-  med->SetMinimum(mlo); med->SetMaximum(mlo + 0.25); med->GetZaxis()->SetTitleOffset(1.5); med->Draw("colz"); geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
+  med->SetMinimum(mlo); med->SetMaximum(mlo + 0.25); med->GetZaxis()->SetTitleOffset(1.5); tb::draw_y_down(med, "colz"); geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
   c.cd(3); gPad->SetRightMargin(0.18);
-  wid->SetMinimum(0.05); wid->SetMaximum(0.2); wid->GetZaxis()->SetTitleOffset(1.5); wid->Draw("colz"); geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
+  wid->SetMinimum(0.05); wid->SetMaximum(0.2); wid->GetZaxis()->SetTitleOffset(1.5); tb::draw_y_down(wid, "colz"); geo.draw(s.xlo, s.xhi, s.ylo, s.yhi);
   c.SaveAs(Form("%s_peak_time_map.png", out));
   TFile fo(Form("%s_peak_time_map.root", out), "RECREATE");
   hits->Write(); med->Write(); wid->Write();

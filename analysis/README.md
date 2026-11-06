@@ -25,6 +25,7 @@ from `../lib/`, so a channel is measured the same way in every study.
 | `tb_spe.h` | Single-photoelectron fit (pedestal + Poisson x Gauss), gain = Q1 / e, `resolved` = Q1 > 3 pedestal sigmas. |
 | `tb_fit.h` | Timing core sigma (Gaussian over +-2 sigma) and tail fraction. |
 | `tb_db.h` | The test-bench db: detector settings, slot/channel -> pixel through mapping + cabling, electrode -> CAEN channel. |
+| `tb_ydown.h` | x-y maps drawn as the bench face, stage y down, (0,0) at the top left: `draw_y_down(h, opt)` draws a copy at -y with the labels as +y, `y_down(y)` places what goes over it. Used by `scan_map`, the gain maps and the `time_xy` maps. |
 
 ## Notes that apply to all of them
 

@@ -5,8 +5,8 @@
 // the mean charge: the gain map), and the gain of the sum of all good channels relative to it, as
 // maps; per pad (the channel brightest at the point) the median gain of the spot with the window
 // systematic, of the sum of all, from the mean charge (no fit), and of the pad alone. Without sums
-// (--contain 0) the brightest channel stands in for the spot. Writes <prefix>.png and prints the
-// per-pad table.
+// (--contain 0) the brightest channel stands in for the spot. Writes <prefix>.png (maps with stage y down,
+// as the bench face) and prints the per-pad table.
 //   root -b -q 'plot_gain_map.C("<scan>_gain_map.csv", "<scan>_gain_map")'
 #include <fstream>
 #include <sstream>
@@ -22,6 +22,7 @@
 #include "TLatex.h"
 #include "TStyle.h"
 #include "TColor.h"
+#include "../../lib/tb_ydown.h"
 
 void plot_gain_map(const char *csv, const char *prefix, double zmax_gain = 0)
 {
@@ -109,9 +110,9 @@ void plot_gain_map(const char *csv, const char *prefix, double zmax_gain = 0)
     TH2F *h = maps[k];
     h->GetZaxis()->SetTitleOffset(0.75) ; h->GetYaxis()->SetTitleOffset(0.5);
     for (auto *a : {h->GetXaxis(), h->GetYaxis(), h->GetZaxis()}) { a->SetTitleSize(0.055) ; a->SetLabelSize(0.05) ; }
-    h->Draw("colz");
+    tb::draw_y_down(h, "colz");
     for (auto &[ch, w] : sw)
-      if (g_main[ch].size() >= 3) tx.DrawLatex(sx[ch] / w, sy[ch] / w, Form("%d", ch));
+      if (g_main[ch].size() >= 3) tx.DrawLatex(sx[ch] / w, tb::y_down(sy[ch] / w), Form("%d", ch));
     TLatex t2 ; t2.SetNDC() ; t2.SetTextSize(0.055);
     t2.DrawLatex(0.07, 0.93, titles[k].c_str());
   }
