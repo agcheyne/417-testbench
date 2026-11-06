@@ -2,15 +2,33 @@
 #
 # XY scan: move the stage to each point and take one rcdaq run there.
 #
-#   scan_xy.sh -x START:STOP:STEP -y START:STOP:STEP (-n EVENTS | -t SECONDS) [options]
-#   scan_xy.sh --points FILE (-n EVENTS | -t SECONDS) [options]     FILE: "x y" per line [mm]
+#   scan_xy.sh WHERE (-n EVENTS | -t SECONDS) [options]
 #   scan_xy.sh --quit                  ask a running scan to stop after its current point
 #
-#   -x, -y SPEC        mm; a single value, or START:STOP:STEP (STOP included when it falls on the grid)
+# Examples (add --dry-run first: it prints the points and checks them; nothing moves):
+#   scan_xy.sh --pad 5,6 --step 0.4 -n 20000          pad row 5, column 6 on a 0.4 mm grid
+#   scan_xy.sh --channel 20 --step 0.4 -n 20000       the pad that V1742 input 20 reads
+#   scan_xy.sh --rows 2-5 --step 1 -n 20000           rows 2 to 5, all columns, 1 mm grid
+#   scan_xy.sh --detector -n 2000                     the centre of every pad
+#   scan_xy.sh -x 58.6:71.6:0.1 -y 83.9 -n 20000      a line, in stage mm
+#
+# WHERE, on the selected detector (testbench.sh show), pads numbered as on the panel's laser face:
+#   --pad R,C          one pad, by row and column
+#   --channel N        the pad that V1742 input N reads (mapping.txt and cabling.txt of the detector)
+#   --rows A[-B]       a block of pads: these rows (default: all) ...
+#   --cols A[-B]       ... and these columns (default: all)
+#   --detector         every pad
+#   --step S           mm between points: a grid over the pads, edge to edge and centred on them;
+#                      without --step, one point at the centre of each pad
+# or in stage mm:
+#   -x, -y SPEC        a single value, or START:STOP:STEP (STOP included when it falls on the grid)
+#   --points FILE      "x y" per line
+#
+# Options:
 #   -n EVENTS          events per point (run ends by itself)
 #   -t SECONDS         seconds per point
 #   -r, --runtype T    rcdaq run type (default: RUNTYPE of the selected detector)
-#   --name TEXT        label for the scan (log file name, packet 910)
+#   --name TEXT        label for the scan (folder name, packet 910; default from WHERE, e.g. Photonis_pad5-6_0.4mm)
 #   --order snake|raster   snake (default) runs Y back and forth; raster always runs Y upwards
 #   --settle S         wait after each move before starting the run (default 1 s)
 #   --max-point-time S give up on a point after S seconds (default 3600; -n with no triggers)
@@ -39,56 +57,43 @@
 # --keep-laser); the HV is not touched unless --hv-off.
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
-BIN=$TB_ROOT/bin
-QUIT=$TB_STATE/scan.quit
-POINT_FILE=$TB_STATE/scan_point.conf
-
-usage() { sed -n '3,39p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+tb_site
+SCAN_PROG=scan_xy.sh
+. "$TB_ROOT/lib/tb_scan.sh"
 
 ORIG_ARGS=("$@")
-tb_site
-MAXT=3600 XSPEC= YSPEC= POINTS= EVENTS= SECONDS_PER= RUNTYPE_OPT= LABEL= ORDER=snake SETTLE=1
-REST=$REST_X,$REST_Y DRY= YES= HVCHECK=1 NOTIFY=$NOTIFY_EMAIL LASER_OFF=1 DARK= HV_OFF=
+[ $# -gt 0 ] || scan_usage
+XSPEC= YSPEC= POINTS= PAD= CHANNEL= ROWS= COLS= WHOLE= STEP= ORDER=snake SETTLE=1
+REST=$REST_X,$REST_Y HV_OFF=
 while [ $# -gt 0 ] ; do
     case $1 in
         -x) XSPEC=$2 ; shift ;;
         -y) YSPEC=$2 ; shift ;;
         --points) POINTS=$2 ; shift ;;
-        -n) EVENTS=$2 ; shift ;;
-        -t) SECONDS_PER=$2 ; shift ;;
-        -r|--runtype) RUNTYPE_OPT=$2 ; shift ;;
-        --name) LABEL=$2 ; shift ;;
+        --pad) PAD=$2 ; shift ;;
+        --channel) CHANNEL=$2 ; shift ;;
+        --rows) ROWS=$2 ; shift ;;
+        --cols) COLS=$2 ; shift ;;
+        --detector) WHOLE=1 ;;
+        --step) STEP=$2 ; shift ;;
         --order) ORDER=$2 ; shift ;;
-        --settle) SETTLE=$2 ; shift ;;
-        --max-point-time) MAXT=$2 ; shift ;;
         --rest) REST=$2 ; shift ;;
         --no-rest) REST= ;;
-        --notify) NOTIFY=$2 ; shift ;;
-        --skip-hv-check) HVCHECK= ;;
-        --keep-laser) LASER_OFF= ;;
         --hv-off) HV_OFF=1 ;;
-        --dark) DARK=1 ;;
-        --dry-run) DRY=1 ;;
-        --yes) YES=1 ;;
-        --quit) mkdir -p "$TB_STATE" ; touch "$QUIT" ; echo "asked the scan to stop after its current point" ; exit 0 ;;
-        -h|--help) usage ;;
-        *) tb_die "unknown option $1 (scan_xy.sh -h)" ;;
+        -h|--help) scan_usage ;;
+        *) scan_common_opt "$@" || tb_die "unknown option $1 ($SCAN_PROG -h)" ; shift $((SCAN_SHIFT - 1)) ;;
     esac
     shift
 done
 
 # --- the plan --------------------------------------------------------------------------
-[ -n "$EVENTS" ] && [ -n "$SECONDS_PER" ] && tb_die "give -n or -t, not both"
-[ -n "$EVENTS$SECONDS_PER" ] || tb_die "give -n EVENTS or -t SECONDS per point"
-[ -z "$EVENTS" ] || [[ $EVENTS =~ ^[1-9][0-9]*$ ]] || tb_die "-n needs a positive integer"
-[ -z "$SECONDS_PER" ] || [[ $SECONDS_PER =~ ^[1-9][0-9]*$ ]] || tb_die "-t needs a positive integer (s)"
-[[ $SETTLE =~ ^[0-9]+(\.[0-9]+)?$ ]] || tb_die "--settle needs seconds"
-[[ $MAXT =~ ^[1-9][0-9]*$ ]] || tb_die "--max-point-time needs seconds"
+scan_check_common
 [[ $ORDER =~ ^(snake|raster)$ ]] || tb_die "--order snake or raster"
 if [ -n "$REST" ] ; then
     [[ $REST =~ ^([0-9.]+),([0-9.]+)$ ]] || tb_die "--rest X,Y"
     RX=${BASH_REMATCH[1]} RY=${BASH_REMATCH[2]}
 fi
+[ -z "$STEP" ] || { [[ $STEP =~ ^[0-9]*\.?[0-9]+$ ]] && tb_fcmp "$STEP" '>' 0 ; } || tb_die "--step needs mm (> 0)"
 
 axis_values() {   # SPEC -> one value per line, %.2f
     awk -v s="$1" 'BEGIN {
@@ -101,22 +106,82 @@ axis_values() {   # SPEC -> one value per line, %.2f
     }'
 }
 
-if [ -n "$POINTS" ] ; then
-    [ -z "$XSPEC$YSPEC" ] || tb_die "give --points or -x/-y, not both"
+range() {   # VAR A[-B] MAX OPTION: VAR="A B", within 0..MAX-1 (not in $(...): tb_die must end the scan)
+    [[ $2 =~ ^([0-9]+)(-([0-9]+))?$ ]] || tb_die "$4 $2: give A or A-B"
+    local a=$((10#${BASH_REMATCH[1]})) b=$((10#${BASH_REMATCH[3]:-${BASH_REMATCH[1]}}))
+    [ $a -le $b ] && [ $b -lt $3 ] || tb_die "$4 $2: give A-B with 0 <= A <= B <= $(($3 - 1)) ($TB_DETECTOR has $3)"
+    printf -v "$1" '%s %s' $a $b
+}
+
+# a block of pads (rows R0-R1, columns C0-C1) -> XS, YS: pad centres, or a grid of STEP over them
+pad_axis() {   # FIRST LAST ORIGIN DIR PITCH
+    awk -v a=$1 -v b=$2 -v o=$3 -v d=$4 -v p=$5 -v s="$STEP" 'BEGIN {
+        u = o + d * a * p ; v = o + d * b * p
+        lo = (u < v ? u : v) ; hi = (u < v ? v : u)
+        if (s == "") { for (i = 0; i <= b - a; i++) printf "%.2f\n", lo + i * p ; exit }
+        lo -= p / 2 ; hi += p / 2
+        n = int((hi - lo) / s + 1e-9) ; if (n < 1) n = 1
+        off = (hi - lo - (n - 1) * s) / 2
+        for (i = 0; i < n; i++) printf "%.2f\n", lo + off + i * s
+    }'
+}
+
+NAREA=0 NMM=0   # how many WHERE options of each kind
+for v in "$PAD" "$CHANNEL" "$WHOLE" "$ROWS$COLS" ; do [ -n "$v" ] && NAREA=$((NAREA + 1)) ; done
+for v in "$XSPEC$YSPEC" "$POINTS" ; do [ -n "$v" ] && NMM=$((NMM + 1)) ; done
+[ $((NAREA + NMM)) -le 1 ] || tb_die "give one WHERE: --pad, --channel, --rows/--cols, --detector, -x/-y or --points"
+[ $((NAREA + NMM)) -eq 1 ] || tb_die "where to scan? --pad R,C, --channel N, --rows/--cols, --detector, -x/-y or --points ($SCAN_PROG -h)"
+[ -z "$STEP" ] || [ $NAREA -eq 1 ] || tb_die "--step goes with the pad options; with -x/-y give START:STOP:STEP"
+
+scan_setup scan
+if [ $NAREA -eq 1 ] ; then
+    for k in NROWS NCOLS PITCH_X_MM PITCH_Y_MM STAGE_X0_MM STAGE_Y0_MM ; do
+        [ -n "${!k}" ] || tb_die "$TB_DETECTOR has no $k in $(tb_detector_dir)/detector.conf: scan it with -x/-y in stage mm"
+    done
+    tb_fcmp "$PITCH_X_MM" '>' 0 && tb_fcmp "$PITCH_Y_MM" '>' 0 || tb_die "PITCH_X_MM / PITCH_Y_MM of $TB_DETECTOR must be > 0"
+    if [ -n "$PAD" ] ; then
+        [[ $PAD =~ ^([0-9]+),([0-9]+)$ ]] || tb_die "--pad R,C (row, column)"
+        pr=${BASH_REMATCH[1]} pc=${BASH_REMATCH[2]}
+        range R $pr $NROWS --pad ; range C $pc $NCOLS --pad
+        AREA="pad row ${R% *}, column ${C% *}" AREA_NAME=pad${R% *}-${C% *}
+    elif [ -n "$CHANNEL" ] ; then
+        [[ $CHANNEL =~ ^[0-9]+$ ]] || tb_die "--channel N (a V1742 input)"
+        SLOTS=" $(tb_table "$(tb_detector_dir)/cabling.txt" | awk '{ print $2 }' | paste -sd' ') "
+        RC=$(tb_table "$(tb_detector_dir)/mapping.txt" | awk -v s="$SLOTS" -v ch=$CHANNEL \
+             'index(s, " " $1 " ") && $2 == ch { print $3, $4 }' | sort -u)
+        case $(echo "$RC" | grep -c .) in
+            1) read -r r c <<< "$RC" ; R="$r $r" C="$c $c" ;;
+            0) tb_die "no pad of $TB_DETECTOR is read by input $CHANNEL with the cabling now (cabled slots:${SLOTS% })" ;;
+            *) tb_die "input $CHANNEL reads several pads (rows, columns: $(echo "$RC" | paste -sd';')): give --pad R,C" ;;
+        esac
+        AREA="the pad V1742 input $CHANNEL reads (row ${R% *}, column ${C% *})" AREA_NAME=ch$CHANNEL
+    else
+        range R "${ROWS:-0-$((NROWS - 1))}" $NROWS --rows ; range C "${COLS:-0-$((NCOLS - 1))}" $NCOLS --cols
+        span() { [ $1 == $2 ] && echo $1 || echo $1-$2 ; }
+        AREA="pads in rows $(span $R), columns $(span $C)" AREA_NAME=rows$(span $R)_cols$(span $C)
+        [ -n "$WHOLE" ] && AREA="every pad" AREA_NAME=detector
+    fi
+    XS=$(pad_axis $C $STAGE_X0_MM ${STAGE_X_DIR:-1} $PITCH_X_MM)
+    YS=$(pad_axis $R $STAGE_Y0_MM ${STAGE_Y_DIR:-1} $PITCH_Y_MM)
+    AREA+=" of $TB_DETECTOR: $( [ -n "$STEP" ] && echo "a $STEP mm grid" || echo "pad centres"), $(echo "$XS" | grep -c .) x $(echo "$YS" | grep -c .) points"
+    [ -n "$LABEL" ] || scan_setup "${TB_DETECTOR}_${AREA_NAME}_$( [ -n "$STEP" ] && echo "${STEP}mm" || echo centres)"
+elif [ -n "$POINTS" ] ; then
     [ -r "$POINTS" ] || tb_die "cannot read $POINTS"
     PLAN=$(tb_table "$POINTS" | awk 'NF != 2 || $1 !~ /^[0-9.]+$/ || $2 !~ /^[0-9.]+$/ { print "bad: " $0 ; next } { printf "%.2f %.2f\n", $1, $2 }')
+    [[ $PLAN == *bad* ]] && tb_die "$POINTS: lines must be \"x y\" in mm ($(echo "$PLAN" | grep bad | head -1))"
 else
-    [ -n "$XSPEC" ] && [ -n "$YSPEC" ] || tb_die "give -x and -y (or --points)"
+    [ -n "$XSPEC" ] && [ -n "$YSPEC" ] || tb_die "give both -x and -y"
     XS=$(axis_values "$XSPEC") ; YS=$(axis_values "$YSPEC")
     [[ $XS == *bad* ]] && tb_die "-x $XSPEC: use a value or START:STOP:STEP"
     [[ $YS == *bad* ]] && tb_die "-y $YSPEC: use a value or START:STOP:STEP"
+fi
+if [ -z "$POINTS" ] ; then
     PLAN=$(i=0 ; for x in $XS ; do
                if [ $ORDER == snake ] && (( i % 2 )) ; then ys=$(echo "$YS" | tac) ; else ys=$YS ; fi
                for y in $ys ; do echo "$x $y" ; done
                i=$((i + 1))
            done)
 fi
-[[ $PLAN == *bad* ]] && tb_die "$POINTS: lines must be \"x y\" in mm ($(echo "$PLAN" | grep bad | head -1))"
 NPOINTS=$(echo "$PLAN" | grep -c .)
 [ $NPOINTS -gt 0 ] || tb_die "no points"
 OUT=$(echo "$PLAN" | awk -v x0=$X_MIN -v x1=$X_MAX -v y0=$Y_MIN -v y1=$Y_MAX \
@@ -126,19 +191,9 @@ $OUT"
 [ -n "$REST" ] && { tb_fcmp $RX '>=' $X_MIN && tb_fcmp $RX '<=' $X_MAX && tb_fcmp $RY '>=' $Y_MIN && tb_fcmp $RY '<=' $Y_MAX ||
                     tb_die "rest position $REST is outside the stage limits" ; }
 
-tb_active
-RUNTYPE=
-tb_conf "$(tb_detector_dir)/detector.conf"
-RUNTYPE=${RUNTYPE_OPT:-$RUNTYPE}
-SCAN_ID=$(date +%s)
-STAMP=$(date -d @$SCAN_ID +%Y%m%d_%H%M%S)
-SCAN_NAME=${LABEL:-scan}
-SCAN_NAME=${SCAN_NAME//[^A-Za-z0-9_.-]/_}
-SCAN_DIR=$TB_LOGS/scans/${STAMP}_$SCAN_NAME
-CSV=$SCAN_DIR/${STAMP}_$SCAN_NAME.csv
-
-echo "scan '$SCAN_NAME': $NPOINTS points, $( [ -n "$EVENTS" ] && echo "$EVENTS events" || echo "$SECONDS_PER s") per point, run type $RUNTYPE"
+echo "scan '$SCAN_NAME': $NPOINTS points, $(scan_per_point) per point, run type $RUNTYPE"
 echo "  detector $TB_DETECTOR, DAQ profile $TB_DAQ"
+[ -n "$AREA" ] && echo "  $AREA"
 echo "  X $(echo "$PLAN" | awk '{ print $1 }' | sort -n | sed -n '1p;$p' | paste -sd' ' | sed 's/ / to /') mm," \
      "Y $(echo "$PLAN" | awk '{ print $2 }' | sort -n | sed -n '1p;$p' | paste -sd' ' | sed 's/ / to /') mm, order $ORDER"
 [ -n "$SECONDS_PER" ] && echo "  data-taking time $(( NPOINTS * SECONDS_PER / 60 )) min plus moves"
@@ -152,27 +207,9 @@ if [ -n "$DRY" ] ; then
 fi
 
 # --- checks before anything moves ---------------------------------------------------------
-STATUS=$(rcdaq_client daq_status -s 2> /dev/null) || tb_die "no rcdaq_server (daq/setup_rcdaq.sh)"
-[ "$(echo $STATUS | awk '{ print $1 }')" == -1 ] || tb_die "rcdaq is taking run $(echo $STATUS | awk '{ print $1 }'): end it first"
-rcdaq_client daq_list_runtypes -s 2> /dev/null | grep -qw -- "$RUNTYPE" || tb_die "rcdaq has no run type '$RUNTYPE' (daq/setup_rcdaq.sh defines them)"
-RULE=$(rcdaq_client daq_list_runtypes 2> /dev/null | awk -v t="$RUNTYPE" '$1 == t && $2 == "-" { print $3 }')
-[ -d "$(dirname "$RULE")" ] && [ -w "$(dirname "$RULE")" ] ||
-    tb_die "rcdaq would write $RUNTYPE runs to $(dirname "$RULE"), which does not exist or is not writable (daq/setup_rcdaq.sh creates it)"
-rcdaq_client daq_status -l 2> /dev/null | grep -q 'Logging enabled' ||
-    tb_die "rcdaq file logging is disabled: the runs would not be written (rcdaq_client daq_open)"
-READLIST=$(rcdaq_client daq_list_readlist)
-echo "$READLIST" | grep -q 'Subevent id: 2000' || tb_die "rcdaq reads no V1742 (packet 2000): run daq/setup_rcdaq.sh"
-echo "$READLIST" | grep -q 'Subevent id: 910' ||
-    tb_warn "rcdaq was not set up by daq/setup_rcdaq.sh: the scan point is NOT stored in the data, only in $CSV"
+scan_check_daq
 "$BIN/motor.sh" pos > /dev/null || exit 1
-if [ -n "$HVCHECK" ] ; then
-    "$BIN/n1470.sh" -u all check --quiet > /dev/null 2>&1
-    case $? in
-        0) ;;
-        3) tb_die "the CAEN HV check reports an alarm (n1470.sh -u all check); --skip-hv-check to start anyway" ;;
-        *) tb_warn "the CAEN HV check could not read every unit" ;;
-    esac
-fi
+scan_check_hv_alarm
 # the detector's electrodes (hv.conf rows with a unit and channel) must be on and ramped,
 # and the laser on: otherwise every run is dark data
 DARKWHY=()
@@ -192,51 +229,26 @@ if [ "$HV_SUPPLY" == n1470 ] ; then
         fi
     done < <(tb_table "$(tb_detector_dir)/hv.conf")
 fi
-LASER=$(timeout 20 "$BIN/pilas.sh" status 2> /dev/null | sed -n 's/^laser emission: //p')
-case $LASER in
-    on) ;;
-    off) DARKWHY+=("the PiLas emission is OFF (bin/pilas.sh on --box-safe)") ;;
-    *) tb_warn "could not read the PiLas (port busy?): check the laser is on" ;;
-esac
+scan_read_laser
+[ "$LASER" == off ] && DARKWHY+=("the PiLas emission is OFF (bin/pilas.sh on --box-safe)")
 if [ ${#DARKWHY[@]} -gt 0 ] ; then
     for W in "${DARKWHY[@]}" ; do echo "  - $W" >&2 ; done
     [ -n "$DARK" ] || tb_die "this scan would only see dark counts: fix the above, or add --dark if that is the point"
     tb_warn "--dark: scanning anyway"
 fi
-if [ -z "$YES" ] ; then
-    read -r -p "start the scan? [y/N] " a
-    [[ $a =~ ^[yY] ]] || { echo "not started" ; exit 0 ; }
-fi
+scan_confirm "start the scan?"
 
 # --- the scan ----------------------------------------------------------------------------
-mkdir -p "$SCAN_DIR" "$TB_STATE"
-rm -f "$QUIT"
+scan_start "# scan $SCAN_NAME, id $SCAN_ID, started $(date '+%F %T') by $USER
+# detector $TB_DETECTOR, DAQ profile $TB_DAQ, run type $RUNTYPE${AREA:+
+# $AREA}
+# $(scan_per_point) per point, order $ORDER, settle $SETTLE s"
 echo "point,target_x_mm,target_y_mm,x_mm,y_mm,run,events,start,end,status" > "$CSV"
 tb_log "scan $SCAN_NAME start: $NPOINTS points, detector $TB_DETECTOR, DAQ $TB_DAQ, run type $RUNTYPE, log $CSV"
-{
-    echo "# scan $SCAN_NAME, id $SCAN_ID, started $(date '+%F %T') by $USER"
-    echo "# detector $TB_DETECTOR, DAQ profile $TB_DAQ, run type $RUNTYPE"
-    echo "# $( [ -n "$EVENTS" ] && echo "$EVENTS events" || echo "$SECONDS_PER s") per point, order $ORDER, settle $SETTLE s"
-    echo "# command: scan_xy.sh $(printf '%q ' "${ORIG_ARGS[@]}")"
-} > "${CSV%.csv}.txt"
-
-rcdaq_client daq_set_runtype "$RUNTYPE" > /dev/null || tb_die "cannot set run type $RUNTYPE"
-IN_RUN= DONE=0 RESULT=aborted FIRST_RUN= LAST_RUN=
+RESULT=aborted
 
 finish() {   # REASON
-    trap - INT TERM
-    if [ -n "$IN_RUN" ] ; then rcdaq_client daq_end > /dev/null 2>&1 ; IN_RUN= ; fi
-    rcdaq_client daq_set_maxevents 0 > /dev/null 2>&1
-    rm -f "$POINT_FILE" "$QUIT"
-    echo "# ended $(date '+%F %T'): $1, $DONE of $NPOINTS points" >> "${CSV%.csv}.txt"   # fit_gain_map.sh --follow waits for it
-    local laser="left on"
-    if [ -n "$LASER_OFF" ] ; then
-        if timeout 20 "$BIN/pilas.sh" off > /dev/null 2>&1 ; then
-            laser=off ; echo "laser switched off"
-        else
-            laser="NOT switched off" ; tb_warn "could not switch the laser off: bin/pilas.sh off"
-        fi
-    fi
+    scan_finish_daq "$1" $NPOINTS
     local hv="left as it is"
     if [ -n "$HV_OFF" ] ; then
         if timeout 60 "$BIN/testbench.sh" hv-off > /dev/null 2>&1 ; then
@@ -252,10 +264,8 @@ finish() {   # REASON
         echo "moving to the rest position $RX, $RY"
         "$BIN/motor.sh" move $RX $RY > /dev/null || tb_warn "could not reach the rest position"
     fi
-    local msg="scan $SCAN_NAME $1: $DONE of $NPOINTS points, runs ${FIRST_RUN:-none}${LAST_RUN:+-$LAST_RUN}, laser $laser, HV $hv, log $CSV"
-    tb_log "$msg"
-    echo "$msg"
-    [ -n "$NOTIFY" ] && echo "$msg" | mail -s "417 test bench: scan $SCAN_NAME $1" $NOTIFY
+    scan_report "scan $SCAN_NAME $1" \
+        "scan $SCAN_NAME $1: $DONE of $NPOINTS points, runs ${FIRST_RUN:-none}${LAST_RUN:+-$LAST_RUN}, laser $LASER_END, HV $hv, log $CSV"
 }
 trap 'finish interrupted ; exit 130' INT TERM
 
@@ -267,30 +277,18 @@ while read -r x y <&3 ; do
     read -r rx ry <<< "$("$BIN/motor.sh" pos)"
     printf 'SCAN_ID=%s\nSCAN_NAME=%s\nPOINT=%d\nNPOINTS=%d\nTARGET_X=%s\nTARGET_Y=%s\n' \
         "$SCAN_ID" "$SCAN_NAME" $i $NPOINTS "$x" "$y" > "$POINT_FILE"
+    scan_point_command >> "$POINT_FILE"
     sleep "$SETTLE"
-    # rcdaq counts the begin-run event too: N data events need a limit of N + 1
-    rcdaq_client daq_set_maxevents $(( ${EVENTS:-0} > 0 ? EVENTS + 1 : 0 )) > /dev/null
-    t0=$(date '+%F %T')
-    rcdaq_client daq_begin > /dev/null || { RESULT="failed (daq_begin at point $i)" ; break ; }
-    IN_RUN=1
-    run=$(rcdaq_client daq_status -s | awk '{ print $1 }')
-    FIRST_RUN=${FIRST_RUN:-$run} LAST_RUN=$run
-    nev=0 start=$(date +%s) st=ok
-    while sleep 0.2 ; do     # a run ends by itself at -n events: notice it within 0.2 s
-        read -r r n rest <<< "$(rcdaq_client daq_status -s)"
-        if [ "$r" == -1 ] ; then nev=$EVENTS ; break ; fi   # ended itself at -n events
-        nev=$n
-        el=$(( $(date +%s) - start ))
-        [ -n "$SECONDS_PER" ] && [ $el -ge $SECONDS_PER ] && break
-        [ $el -ge $MAXT ] && { st=timeout ; tb_warn "point $i: only $nev events after $MAXT s" ; break ; }
-    done
-    [ "$r" == -1 ] || rcdaq_client daq_end > /dev/null
-    IN_RUN=
-    echo "$i,$x,$y,$rx,$ry,$run,$nev,$t0,$(date '+%F %T'),$st" >> "$CSV"
-    echo "  run $run, $nev events${st/ok/}"
+    scan_take_run $i 0.2 || { RESULT="failed (daq_begin at point $i)" ; break ; }   # notices the end of a -n run within 0.2 s
+    echo "$i,$x,$y,$rx,$ry,$RUN,$NEV,$T0,$(date '+%F %T'),$PST" >> "$CSV"
+    echo "  run $RUN, $NEV events${PST/ok/}"
     DONE=$((i + 1))
     i=$((i + 1))
 done 3<<< "$PLAN"
 [ $DONE == $NPOINTS ] && RESULT=finished
 finish "$RESULT"
+if [ $DONE -gt 0 ] ; then
+    echo "next: gain map  $TB_ROOT/analysis/gain_hv/fit_gain_map.sh $SCAN_DIR"
+    echo "      timing    $TB_ROOT/analysis/time_xy/time_xy.sh $SCAN_DIR"
+fi
 [ "$RESULT" == finished ] || [ "$RESULT" == stopped ]

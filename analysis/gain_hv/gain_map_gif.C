@@ -3,7 +3,8 @@
 // on the colour scale of the final map (2-98 % of its points), and the full map held at the end. Next to
 // it (spectrum = true) the newest point's spot charge spectrum with its single-photoelectron fit, as
 // live_gain_map.C shows it. Reads the scan's CSV, fit_gain_map.sh's <scan>_gain_map.csv and, for the
-// spectra, its <scan>_gain_map_parts/; writes <scan>_gain_map.gif.
+// spectra, its <scan>_gain_map_spectra.root (or <scan>_gain_map_parts/ while it is fitting); writes
+// <scan>_gain_map.gif.
 //   root -b -q 'analysis/gain_hv/gain_map_gif.C("<scan>")'                 ~60 frames, gain
 //   root -b -q 'analysis/gain_hv/gain_map_gif.C("<scan>", "mu", 120, 8)'   120 frames of mu, 80 ms each
 //   root -b -q 'analysis/gain_hv/gain_map_gif.C("<scan>", "gain", 60, 10, false)'   the map alone
@@ -51,7 +52,11 @@ void gain_map_gif(const char *scan, const char *z = "gain", int frames = 60, int
     }
     gSystem->FreeDirectory(dd);
   }
-  if (spectrum && chunk_of.empty()) { printf("no spectra in %s: the map alone\n", parts.c_str()) ; spectrum = false ; }
+  // a finished map: fit_gain_map.sh has packed the spectra of every run into one file
+  std::string packed = dir + "/" + name + "_gain_map_spectra.root";
+  if (chunk_of.empty() && !gSystem->AccessPathName(packed.c_str()))
+    for (auto &p : pts) try { chunk_of[std::stol(p["run"])] = packed ; } catch (...) {}
+  if (spectrum && chunk_of.empty()) { printf("no spectra in %s or %s: the map alone\n", packed.c_str(), parts.c_str()) ; spectrum = false ; }
   // one set of axes for every frame's spectrum: from the pedestal to 4.5x the scan's median Q1, and up to
   // twice the highest bin of the spectra shown
   double sxlo = NAN, sxhi = NAN, symax = NAN;

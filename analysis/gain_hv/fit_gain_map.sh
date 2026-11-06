@@ -1,6 +1,6 @@
 #! /bin/bash
 #
-# Gain map of a finished xy scan (bin/scan_xy.sh): single-photoelectron fit at every point of the
+# Gain map of a finished xy scan (scans/scan_xy.sh): single-photoelectron fit at every point of the
 # charge summed over all good channels ("all"), as photoelectrons share their charge between pads
 # (a single pad gets ~0.8 of it even at a pixel centre), with the common mode subtracted per event
 # and noisy channels left out (gain_hv set_auto_spot); also of the spot (the pads holding 95 % of
@@ -32,10 +32,13 @@
 #                      <scan>.txt, or state/scan_point.conf no longer its); then merge and plot. One job reads ~360
 #                      events/s, so a 2 kHz scan of 20k-event points every ~15 s needs ~4-5 jobs to keep up
 #   --merge-only       no fitting: merge and plot the chunks fitted so far
+#   --keep-parts       keep <scan>_gain_map_parts/ after every chunk is fitted (for --resume or
+#                      --merge-only later, or to look at a chunk); by default it is removed then
 #
 # The points are fitted in chunks of 10, each chunk's table kept as soon as it is done. Ctrl-C,
 # or kill $(cat <scan>_gain_map_parts/driver.pid) when it runs in the background, stops the jobs,
-# then merges and plots the finished chunks; --resume goes on from there.
+# then merges and plots the finished chunks; --resume goes on from there. Once every chunk is fitted and
+# merged, the chunks are removed (all of it can be fitted again from the .evt files).
 #
 # Writes, in the scan's folder:
 #   <scan>_gain_map.csv     every fit with a photoelectron peak above the pedestal: point, x_mm,
@@ -50,18 +53,23 @@
 #   <scan>_gain_map.png     mu and gain of the spot per point, and the sum of all against it; per
 #                           pad (the brightest channel) the gain of the spot with the window
 #                           systematic, of the sum of all, from the mean charge, and of the pad alone
-#   <scan>_gain_map.log     the settings, the per-channel table and the ROOT output of the plot
-#   <scan>_gain_map_parts/  each chunk's run list, fit table, spectra (.root) and log
+#   <scan>_gain_map.log     the settings, the per-channel table and the ROOT output of the plot, then
+#                           gain_hv's two summary lines of every run (events, DRS4 trigger mismatches,
+#                           the spot's channels, noisy channels left out)
+#   <scan>_gain_map_spectra.root  the spot and all-channel charge spectra of every run (q_run<N>_spot,
+#                           q_run<N>_all; gain_map_gif.C draws them)
+#   <scan>_gain_map_parts/  while fitting (or stopped, or --keep-parts): each chunk's run list, fit
+#                           table, spectra of every channel (.root) and log
 # Running it again without --resume or --merge-only starts again and overwrites these.
 
 . "$(dirname "$(readlink -f "$0")")/../../lib/tb.sh"
 HERE=$(dirname "$(readlink -f "$0")")
 tb_site
 
-usage() { sed -n '3,55p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,63p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 SCAN= WINDOW=24.1:27.3 SYST="24.1:27.0 24.1:33.0" CONTAIN=0.95 EVENTS=20000 JOBS=$(( $(nproc) - 1 )) ZMAX=0 POINTS= MODE=fresh
-CHUNK=10 CHUNK_FOLLOW=2
+CHUNK=10 CHUNK_FOLLOW=2 KEEP_PARTS=
 while [ $# -gt 0 ] ; do
     case $1 in
         --window) WINDOW=$2 ; shift ;;
@@ -74,6 +82,7 @@ while [ $# -gt 0 ] ; do
         --resume) MODE=resume ;;
         --merge-only) MODE=merge ;;
         --follow) MODE=follow ;;
+        --keep-parts) KEEP_PARTS=1 ;;
         -h|--help) usage ;;
         -*) tb_die "unknown option $1 (fit_gain_map.sh -h)" ;;
         *) [ -z "$SCAN" ] || tb_die "one scan at a time" ; SCAN=$1 ;;
@@ -106,7 +115,7 @@ NAME=$(basename "$DIR")
 PREFIX=$DIR/$NAME
 CSV=$PREFIX.csv
 [ -r "$CSV" ] && head -1 "$CSV" | grep -q '^point,target_x_mm,target_y_mm,x_mm,y_mm,run,' ||
-    tb_die "no $CSV from an xy scan (bin/scan_xy.sh)"
+    tb_die "no $CSV from an xy scan (scans/scan_xy.sh)"
 RUNTYPE=$(sed -n 's/^# detector .*, run type \([^ ,]*\).*/\1/p' "$PREFIX.txt" 2> /dev/null)
 [ -n "$RUNTYPE" ] || tb_die "no run type in $PREFIX.txt"
 command -v root > /dev/null || tb_die "no root in PATH (source the ROOT setup first)"
@@ -170,16 +179,34 @@ merge_and_plot() {
     [ -e "${PREFIX}_gain_map.png" ] && echo "  ${PREFIX}_gain_map.png" || { tb_warn "no map: see $LOG" ; return 1 ; }
 }
 
+# once every chunk is fitted and the map plotted: the spot and all-channel spectra into one file, each
+# run's summary lines into the log, and the chunks removed (unless --keep-parts)
+pack_parts() {
+    local l
+    [ -z "$KEEP_PARTS" ] || return 0
+    for l in "$PARTS"/chunk*.txt ; do [ -e "${l%.txt}.csv" ] || return 0 ; done
+    ls "$PARTS"/chunk*.root > "$PARTS/roots.txt" 2> /dev/null
+    ( cd "$HERE" && root -b -q -l "merge_spectra.C(\"$PARTS/roots.txt\", \"${PREFIX}_gain_map_spectra.root\", \"^q_run[0-9]+_(spot|all)\$\")" ) > "$PARTS/merge_spectra.log" 2>&1 &&
+        grep -q '^merge_spectra: [1-9]' "$PARTS/merge_spectra.log" ||
+        { tb_warn "could not merge the spectra (see $PARTS/merge_spectra.log): $PARTS kept" ; return 0 ; }
+    { echo "# --- gain_hv's summary of every run"
+      cat "$PARTS"/chunk*.log | grep -E '^gain_hv: run |rror' ; } >> "$LOG"
+    rm -rf "$PARTS"
+    echo "  spectra in ${PREFIX}_gain_map_spectra.root; the chunks removed (--keep-parts keeps them)"
+}
+
 if [ "$MODE" == merge ] ; then
-    [ -r "$PARTS/points.txt" ] || tb_die "no $PARTS: nothing fitted yet"
-    merge_and_plot ; exit
+    [ -r "$PARTS/points.txt" ] || {
+        [ -e "$OUT" ] && tb_die "no $PARTS: removed after the last merge, the results are in $OUT (fit again with --keep-parts to keep them)"
+        tb_die "no $PARTS: nothing fitted yet" ; }
+    merge_and_plot && pack_parts ; exit
 fi
 kill_tree() { local c ; for c in $(pgrep -P "$1") ; do kill_tree "$c" ; done ; kill "$1" 2> /dev/null ; }
 
 # --follow: fit the points while the scan goes on (scan_xy.sh writes a point's CSV line after its run
 # has ended), CHUNK_FOLLOW points per chunk; a last, shorter chunk once the scan has ended
 if [ "$MODE" == follow ] ; then
-    rm -rf "$PARTS"
+    rm -rf "$PARTS" "${PREFIX}_gain_map_spectra.root"
     mkdir -p "$PARTS"
     echo "$SETTINGS" > "$PARTS/settings.txt"
     : > "$PARTS/points.txt"
@@ -232,7 +259,7 @@ if [ "$MODE" == follow ] ; then
         echo "stopped: plotting the chunks finished so far"
     fi
     echo "$(date +%T) all chunks done"
-    merge_and_plot ; exit
+    merge_and_plot && [ -z "$stopped" ] && pack_parts ; exit
 fi
 
 if [ "$MODE" == resume ] ; then
@@ -240,7 +267,7 @@ if [ "$MODE" == resume ] ; then
     [ "$(cat "$PARTS/settings.txt")" == "$SETTINGS" ] ||
         tb_die "the chunks so far have $(cat "$PARTS/settings.txt"), not $SETTINGS: start again without --resume"
 else
-    rm -rf "$PARTS"
+    rm -rf "$PARTS" "${PREFIX}_gain_map_spectra.root"
     mkdir -p "$PARTS"
     echo "$SETTINGS" > "$PARTS/settings.txt"
     # the points taken (point x y run), in chunks of CHUNK files
@@ -261,7 +288,7 @@ for l in "$PARTS"/chunk*.txt ; do [ -e "${l%.txt}.csv" ] || TODO+=("${l%.txt}") 
 NPTS=$(grep -c . "$PARTS/points.txt")
 NTODO=$(cat "${TODO[@]/%/.txt}" 2> /dev/null | grep -c .)
 [ "$JOBS" -le "${#TODO[@]}" ] || JOBS=${#TODO[@]}
-if [ "${#TODO[@]}" -eq 0 ] ; then echo "all $NPTS points fitted already" ; merge_and_plot ; exit ; fi
+if [ "${#TODO[@]}" -eq 0 ] ; then echo "all $NPTS points fitted already" ; merge_and_plot && pack_parts ; exit ; fi
 echo "scan $NAME: $NTODO of $NPTS points to fit, $SETTINGS, $JOBS jobs (about $(( NTODO * EVENTS / 360 / JOBS / 60 + 1 )) min)"
 echo "  chunks in $PARTS; Ctrl-C stops and plots the chunks done so far, --resume goes on"
 t0=$(date +%s)
@@ -286,4 +313,4 @@ if [ -n "$stopped" ] ; then
 else
     for l in "${TODO[@]}" ; do [ -e "$l.csv" ] || tb_warn "chunk $(basename "$l") wrote no table: see $l.log" ; done
 fi
-merge_and_plot
+merge_and_plot && [ -z "$stopped" ] && pack_parts

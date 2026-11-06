@@ -1,5 +1,5 @@
 # DAQ / scan status and the HV channel config for the bench panel: bin/bench_publisher.sh
-# (docs/phoebus_panel_plan.md). Install as hv-annunciator.service.
+# (docs/epics.md). Install as hv-annunciator.service.
 [Unit]
 Description=Bench panel publisher (rcdaq, scans, hv.conf -> N1470 IOC soft records)
 Wants=ioc-n1470.service

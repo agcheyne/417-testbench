@@ -4,7 +4,7 @@ Control, DAQ and first-look analysis for the photodetector test bench in room 41
 MCP-PMTs, HRPPDs and similar detectors, a PiLas laser on a Thorlabs XY stage, CAEN N1470 HV,
 a CAEN V1742 digitiser read out with rcdaq, and the QE bench (Keithley 6487, Newport power meter).
 
-This is intended to be a more general improvement to the `~/hpDIRC` (which stays in use until the switch, see below) and the old `~/MCP_Scan` Wavedump based analysis.
+It replaces `~/hpDIRC` (switched over 5 Nov 2026; kept only as an archive; its October HV alarms are at the start of `logs/hv_alarms.log`) and the old `~/MCP_Scan` Wavedump based analysis. The students' analysis kit is a separate repository in `~/student_kit`.
 
 ## Layout
 
@@ -12,13 +12,14 @@ This is intended to be a more general improvement to the `~/hpDIRC` (which stays
 | --- | --- |
 | `bin/` | Instrument and bench commands. `-h` for help on any script. |
 | `daq/` | rcdaq setup (`setup_rcdaq.sh`) and the begin-run readback scripts. |
+| `scans/` | The rcdaq scans: `scan_xy.sh` (stage, by pad or in mm) and `scan_hv.sh` (one HV channel). Start with `scans/README.md`. |
 | `db/` | The database, plain text in git: site settings, one folder per detector, DAQ profiles. |
-| `lib/` | Shared code for use in analysis: `tb.sh` for the scripts; `tb_pulse.h`, `tb_spe.h`, `tb_db.h` for methods. |
+| `lib/` | Shared code for use in analysis: `tb.sh` for the scripts, `tb_scan.sh` for the scans; `tb_pulse.h`, `tb_spe.h`, `tb_db.h` for methods. |
 | `analysis/` | pmonitor analysis projects, one folder each (`general/` to start). |
-| `online_monitor/` | pmonitor analysis projects, focused on live-monitoring. |
+| `online_monitor/` | Live monitors (`general/`, `waveforms/`). Start with `online_monitor/Online_Monitor_Cheat_Sheet.md`. |
 | `logs/`, `state/` | Written at run time, not in git: HV logs, scan logs, the current selection. |
 
-See `Lab_instruments_Cheat_Sheet.md` for day-to-day use of every instrument.
+See `Lab_instruments_Cheat_Sheet.md` for day-to-day use of every instrument. Though most functionality can be called in the DAQ or done by a scan script.
 
 ## The database (`db/`)
 
@@ -39,7 +40,7 @@ bin/testbench.sh list
 ```
 
 ```bash
-bin/testbench.sh use detector HRPPD_tile66
+bin/testbench.sh use detector HRPPD_26
 ```
 
 ```bash
@@ -56,12 +57,12 @@ analysis knows what the data is without a run sheet.
 
 ## Taking data
 
-- `daq/setup_rcdaq.sh` (try `--dry-run` first) configures rcdaq and the V1742 from the selected profile.
-- `bin/scan_xy.sh` steps the stage over a grid and takes one rcdaq run per point
+- `daq/setup_rcdaq.sh` (try `--dry-run` first) configures rcdaq and the V1742s from the selected profile: board 0, and board 1 too when the detector's `cabling.txt` has a packet 2001 line.
+- `scans/scan_xy.sh` steps the stage over pads or a grid and takes one rcdaq run per point
   (`--dry-run` prints the plan; `scan_xy.sh --quit` stops after the current point). With enough
   events per point (~20000 at low light), `analysis/gain_hv/fit_gain_map.sh logs/scans/<scan>` fits
   the gain of every channel at every point in parallel jobs and maps it.
-- `bin/scan_hv.sh` steps one CAEN channel through a list of voltages (it must already be on) and
+- `scans/scan_hv.sh` steps one CAEN channel through a list of voltages (it must already be on) and
   takes one run per point. Acquisition only: fit and plot the gain afterwards with
   `analysis/gain_hv/fit_hv_scan.sh logs/scans/<scan>` (`--spot` sums a group of pixels).
 - `bin/lamp_scan.sh FROM TO STEP` measures the lamp through the monochromator on the power meter,
@@ -70,6 +71,14 @@ analysis knows what the data is without a run sheet.
 - Every scan gets its own folder, `logs/scans/<date>_<time>_<name>/`: the scan's CSV and `.txt`, and
   whatever analysis output belongs to it. Plots and files from single-run studies go in
   `logs/runs/run<N>/`. The HV logs and `testbench.log` stay at the top of `logs/`.
+- What a run is lives in its begin-run packets (910/911: detector, HV table, cabling, DAQ profile,
+  scan id, point, target and the scan's command line; 930/931 stage; 940/941 HV; 950/951 laser), so
+  `logs/` keeps only what the data cannot: the scan's CSV as its run index (and the points that
+  failed), HV alarms and trips (`hv_alarms.log`), bench actions
+  (`testbench.log`, `daq_commands.log`: one line per command, the full output only when it
+  failed; the last good rcdaq setup's output is in `setup_rcdaq_last.log`), and the analysis
+  results. The fits' working files (`<scan>_gain_map_parts/`, `<scan>_live_parts/`) are removed
+  once the fit is done (`--keep-parts` keeps them); everything in them can be fitted again from the `.evt` files.
 - `bin/motor.sh` moves and reads the XY stage.
 
 ## Analysis

@@ -12,11 +12,12 @@
 #   tb_table FILE      print a whitespace table without comments or blank lines
 #   tb_fcmp A OP B     floating-point compare (OP: < <= > >= == !=), exit status
 #   tb_calc EXPR       floating-point arithmetic through awk
+#   tb_ca caget|caput|cainfo ARGS...   Channel Access to the bench's IOCs
 
 TB_ROOT=$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")
 TB_DB=$TB_ROOT/db
 TB_STATE=$TB_ROOT/state       # run-time selection and scan context, not in git
-TB_LOGS=$TB_ROOT/logs         # not in git
+TB_LOGS=$TB_ROOT/logs         # output logs, not in git
 
 tb_die()  { echo "ERROR: $*" >&2 ; exit 1 ; }
 tb_warn() { echo "WARNING: $*" >&2 ; }
@@ -68,3 +69,8 @@ tb_fcmp() { awk -v a="$1" -v b="$3" -v op="$2" 'BEGIN {
     if (r < 0) exit 2 ; exit !r }' ; }
 
 tb_calc() { awk "BEGIN { printf \"%.6g\n\", $* }" ; }
+
+# The IOCs all run on this PC: the stage on CA port 5064, the N1470 on 5070, the PiLas on 5072 (the last two
+# listen on 127.0.0.1 only). Full paths: the services and rcdaq have no EPICS PATH.
+TB_EPICS_BIN=$HOME/epics/base/bin/linux-x86_64
+tb_ca() { EPICS_CA_AUTO_ADDR_LIST=NO EPICS_CA_ADDR_LIST="127.0.0.1 127.0.0.1:5070 127.0.0.1:5072" "$TB_EPICS_BIN/$1" "${@:2}" ; }

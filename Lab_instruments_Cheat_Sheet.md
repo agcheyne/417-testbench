@@ -13,7 +13,7 @@ The instrument scripts live in `bin/` of this repository; run them from the repo
 | Keithley 6487 picoammeter + V-source (s/n 4686018) | `keithley6487.sh` | Prolific PL2303 `DGBCb2A9709` | 9600 8N1, CR, XON/XOFF (instrument must be set to RS-232) | No, by choice |
 | PiLas 405 nm laser (PLC0405CW0F00001279) | `pilas.sh` | FTDI FT232R `BG01VUCO` | 19200 8N1, CR, no flow control | Yes, packets 950/951 |
 | Newport 1830-R power meter | `newport_powermeter.sh` | Native USB `104d:cec7` | USB (libusb) | No |
-| Thorlabs APT stepper (X/Y motors) | `motor.sh` (EPICS `THOR_X` / `THOR_Y`) | FTDI `0403:faf0` | via EPICS IOC + `thor_epics` | Yes, packets 930/931/932 |
+| Thorlabs APT stepper (X/Y motors) | `motor.sh` (EPICS `THOR_X` / `THOR_Y`) | FTDI `0403:faf0` | via EPICS IOC + `thor_epics` | Yes, packets 930/931 |
 | Tektronix MSO64B oscilloscope | none yet (by hand) | LAN 192.168.0.125 | socket server port 4000 | No |
 | JY H20 UV monochromator | `monochromator.sh` | NI GPIB-USB-HS `3923:709b` → `/dev/gpib0`, GPIB address 1 | GPIB, linux-gpib 4.3.7 | No |
 
@@ -31,9 +31,9 @@ all start at boot, without anyone logging in. After a reboot, the only thing to 
 | `ioc-pilas` | EPICS IOC of the PiLas laser (CA port 5072) | journal |
 | `ioc-thorlabs` | EPICS IOC of the XY stage, `THOR_X` / `THOR_Y` (CA port 5064) | `logs/services/ioc-thorlabs.log` |
 | `thor-epics` | `~/v1/thor_epics -e`: the APT controller over USB, moves the stage | `logs/services/thor-epics.log` |
-| `rcdaq-server` | `rcdaq_server`, configured at its start by `daq/setup_rcdaq.sh` for the active detector and DAQ profile | `~/rcdaq.log`, setup output in `logs/daq_commands.log` |
+| `rcdaq-server` | `rcdaq_server`, configured at its start by `daq/setup_rcdaq.sh` for the active detector and DAQ profile | `~/rcdaq.log`; the setup in `logs/daq_commands.log` (one line; the full output when it failed) and the last good one's output in `logs/setup_rcdaq_last.log` |
 | `bench-publisher` | DAQ and scan status for the panel, the panel's DAQ commands, HV channel names and limits | journal |
-| `hv-annunciator` | the HV alarms (`n1470.sh annunciate`): logs, sound, speech, pop-ups | `logs/hv_alarms.log` |
+| `hv-annunciator` | the HV alarms (`bin/hv_annunciator.sh`): sound, log, mail, the panel's banner | `logs/hv_alarms.log` |
 
 ```bash
 systemctl --user list-units 'ioc-*' thor-epics rcdaq-server bench-publisher hv-annunciator
@@ -42,7 +42,7 @@ systemctl --user list-units 'ioc-*' thor-epics rcdaq-server bench-publisher hv-a
 - **Restart one:** `systemctl --user restart NAME`; stop / start likewise. Stopping `rcdaq-server` ends a run
   that is going first. Stopping `thor-epics` stops it through its `stop` file.
 - **GECO2020 or the PiLas GUI** need the port: `systemctl --user stop ioc-n1470` (or `ioc-pilas`) first, `start`
-  it afterwards. The scripts (`n1470.sh`, `pilas.sh`) use the serial port by themselves while an IOC is stopped.
+  it afterwards. While an IOC is stopped `n1470.sh` (or `pilas.sh`) does nothing: use the front panel.
 - **After re-plugging a CAEN USB cable** (or moving hubs): `systemctl --user restart ioc-n1470`. The IOC finds
   A (236) and B (1593) by board serial only when it starts, then keeps those ports. A unit on another socket shows
   `N1470_x:SN_OK` 0 (MAJOR alarm, writes refused) or COMM INVALID, and the A/B readings can be swapped. After the
@@ -53,7 +53,7 @@ systemctl --user list-units 'ioc-*' thor-epics rcdaq-server bench-publisher hv-a
 - **`thor-epics` at start** moves nothing and does not home (a start-up bug that could drive Y to 0 was fixed on 1 Nov
   2026). The controller keeps its position and "homed" while it stays powered; after it was switched off, home by hand
   with the box safe: `bin/motor.sh home both --yes`, then `bin/motor.sh status` says `homed enabled`.
-- Details, and the IOCs' design: `docs/epics_plan.md`; the panel and the alarms: `docs/phoebus_panel_plan.md`.
+- The IOCs, PVs, safety rules, the panel and the alarms: `docs/epics.md`.
 
 ## Detectors and DAQ profiles (`db/`, `testbench.sh`)
 
@@ -62,7 +62,7 @@ The bench can hold any MCP-PMT / HRPPD. What changes per detector, and per kind 
 | Command | What it does |
 | --- | --- |
 | `bin/testbench.sh list` | Detectors and DAQ profiles in the db; `*` marks the ones in use |
-| `bin/testbench.sh use detector HRPPD_tile66` | Select the detector: rcdaq run type, HV electrode names, pixel map |
+| `bin/testbench.sh use detector HRPPD_26` | Select the detector: rcdaq run type, HV electrode names, pixel map |
 | `bin/testbench.sh use daq v1742_1G` | Select the readout profile; then run `daq/setup_rcdaq.sh` to apply it |
 | `bin/testbench.sh show` | The selection and all its settings |
 | `bin/testbench.sh check` | Check every db file (run after editing one) |
@@ -72,7 +72,7 @@ The bench can hold any MCP-PMT / HRPPD. What changes per detector, and per kind 
 
 Per detector (`db/detectors/<name>/`): `detector.conf` (type, serial, run type, rows × cols, pitch, stage position of pixel 0,0), `hv.conf` (electrode → CAEN unit/channel and setpoints), `mapping.txt` (digitiser slot + channel → pixel), `cabling.txt` (which rcdaq packet reads which slot here).
 
-**Which readout is cabled, from the bench panel:** the DAQ box's "cabled" row shows the readout read now and, for a detector with 2–4 readouts (`SLOT_NAMES` in its `detector.conf`, e.g. Photonis: readout 0 / readout 1 / readout 1 turned), one button each (unlocked, rcdaq stopped). A click rewrites `cabling.txt` for the next runs: the old line stays as a comment with the date, the new readout and the first run it applies to (clicks with no run in between make one note); then `testbench.sh check` and the faces are redrawn (open panels reload them). Every run's begin-run packet keeps the cabling it was taken with; the analysis reads the db's current `cabling.txt`, so analyse old runs from before a change with the cabling of their time (the comments in the file say which runs).
+**Which readout is cabled, from the bench panel:** the DAQ box has a row per V1742, "board 0" (packet 2000, s/n 49) and "board 1" (packet 2001, s/n 51240). Each shows the readout that board reads now and, for a detector with 2–4 readouts (`SLOT_NAMES` in its `detector.conf`, e.g. Photonis: readout 0 / readout 1 / readout 1 turned), one button each, plus "none" = not read (unlocked, rcdaq stopped). One board at least reads: "none" on the second is refused. The first board read gives the trigger; board 1 alone needs its own TR0 cable, and the analyses still read packet 2000 only. A click rewrites that board's line of `cabling.txt` for the next runs: the old line stays as a comment with the date, the new readout and the first run it applies to (clicks with no run in between make one note); then `testbench.sh check` and the faces are redrawn (open panels reload them). Two boards may not read the same readout, nor two that share pixels (Photonis: the join with either readout). `daq/setup_rcdaq.sh` (Apply, the rcdaq-server service) reads the boards that have a line in `cabling.txt`, board 0 alone if none has; so adding or dropping a board ("none") also sets rcdaq up again (for two boards: both need the TR0 trigger, else the DAQ hangs). Every run's begin-run packet keeps the cabling it was taken with; the analysis reads the db's current `cabling.txt`, so analyse old runs from before a change with the cabling of their time (the comments in the file say which runs).
 
 DAQ profiles (`db/daq/`):
 
@@ -95,10 +95,10 @@ rcdaq stores runtime information in the .evt file as packets in the begin-run ev
 | Packet | Content | Written by |
 | --- | --- | --- |
 | 900 | The setup script itself | `setup_rcdaq.sh` |
+| 901, 902 | V1742 factory DRS4 calibration, one per board read (packet order) | `setup_rcdaq.sh` (device_CAENcalibration) |
 | 910 / 911 | Test-bench db: detector, HV table, cabling, DAQ profile, scan point / numbers | `get_testbench_info.sh` |
-| 920 / 921 | V1742 digitiser info: text / numbers (s/n, firmware) | `get_v1742_info.sh` |
-| 930 / 931 | Thorlabs motor positions: text / whole mm (Y, then X; fractions are cut off) | `get_motor_xy_info.sh` |
-| 932 | Thorlabs motor positions, X then Y \[µm\] | `get_motor_xy_info.sh` |
+| 920 / 921 | V1742 digitiser info, every board read: text / numbers (s/n, firmware) | `get_v1742_info.sh` |
+| 930 / 931 | Thorlabs motor positions: caget text / numbers: 2 (format), X, Y \[µm\] | `get_motor_xy_info.sh` |
 | 940 / 941 | Both CAEN HV units: text / numbers | `get_hv_info.sh` |
 | 950 / 951 | PiLas laser: text / numbers | `get_laser_info.sh` |
 | 2000 | V1742 waveform data (every event) | `device_CAENdrs` |
@@ -111,20 +111,18 @@ Packet 951, 15 integers in order: controller serial (trailing digits), wavelengt
 
 ## CAEN N1470 HV (2 units, `n1470.sh`)
 
-Every command needs `-u A`, `-u B`, a board serial (`236`, `1593`) or `-u all` (`status`, `check`, `mon` and `off` only). Both units share one by-id name, so the script finds each one by asking every port for its board serial.
+Everything goes through the N1470 IOC (`ioc-n1470`). With it stopped (e.g. for GECO2020) the script does nothing: use the front panel. `-u A`, `-u B`, or `-u all` (`status`, `check`, `off` only).
 
 | Command | What it does |
 | --- | --- |
-| `bin/n1470.sh units` | List the units found and their ports |
+| `bin/n1470.sh units` | The port the IOC found each unit on |
 | `bin/n1470.sh -u all status` | Board info + table of all 8 channels (VSET, VMON, ISET, IMON, ramps, MAXV, flags) |
-| `bin/n1470.sh -u all check --color` | Status + ALARM/NOTE lines; raises the alarm (see HV monitoring below), exit 3 on alarm |
-| `bin/n1470.sh mute` / `unmute` | Silence / restore the alarm sound; monitoring continues |
-| `bin/n1470.sh test-alarm` | Are the alarms working? Fires every output once with a fake alarm (sounds in the room), then "cleared", and reports what each output did; `--quiet` = no sound; `--remote-only` = sound + spoken message on your remote desktop only |
-| `bin/n1470.sh -u A mon VMON` | Raw monitor query; add a channel number (0–3) for one channel, `BD…` names for board parameters |
-| `bin/n1470.sh -u A set VSET 0 1650` | Set a parameter: VSET, ISET, MAXV, RUP, RDW, TRIP, PDWN (one unit at a time) |
-| `bin/n1470.sh -u A off 2` | Turn channel 2 off (`off all` = the whole unit) |
-| `bin/n1470.sh -u all off all` | Turn all 8 channels off |
-| `bin/n1470.sh -u A on 0 --box-safe` | Turn a channel on; refuses without the flag |
+| `bin/n1470.sh -u all check` | Status + the alarms the IOC sees; exit 3 on alarm (scans run it before they start) |
+| `bin/n1470.sh mute` / `unmute` | The alarm sound, as the panel's mute (it ends when the alarms clear) |
+| `bin/n1470.sh -u A mon VMON` | One parameter; add a channel number (0–3) for one channel, `BD…` names for board parameters |
+| `bin/n1470.sh -u A set VSET 0 1650` | Set VSET, ISET, MAXV, RUP, RDW, TRIP or PDWN on a channel (or `all`) |
+| `bin/n1470.sh -u A off 2` | Turn channel 2 off (`off all` = the whole unit; `-u all off all` = all 8) |
+| `bin/n1470.sh -u A on 0 --box-safe` | Turn a channel on: only a channel in the detector's `hv.conf`, and only with the flag |
 
 Units: V, µA, V/s. The supply ramps by itself at RUP/RDW, so the script returns straight away. MAXV reads 2400 V on all 8 channels (22 Oct).
 
@@ -133,75 +131,25 @@ Before powering the detector:
 - Check VSET on every channel: older setpoints may still be loaded.
 - Clear any `KILL` or `DIS` flags on the units; channels can't turn on with them.
 - Fill in unit and channel for each electrode in the detector's `db/detectors/<name>/hv.conf`; `status` then labels each channel, and `testbench.sh hv-show` compares the setpoints.
-- Close GECO2020 first: only one program can use a port.
 
-## HV monitoring and alarms
+## HV alarms
 
-The `hv-annunciator` service (`n1470.sh annunciate`) checks every 2 s, through the N1470 IOC, whether or not anyone is watching: it raises the alarm and writes the logs below. The conditions are the IOC's alarm records, so the bench panel shows the same (red / orange rows, the banner, the log). The old minute timer `n1470-check.timer` is disabled. To look at the values in a terminal (on the lab PC or in VNC; it only shows, the annunciator does the alarms):
+The IOC's alarm records decide what is an alarm, so the bench panel, `n1470.sh check` and the annunciator all show the same. The `hv-annunciator` service (`bin/hv_annunciator.sh`) reads them every 2 s, whether or not anyone is watching, and:
 
-```bash
-watch -c -n 5 "$PWD/bin/n1470.sh -u all check --color"
-```
+- plays the alarm sound in the room, again and again until it is muted (panel "mute alarm sound", `bin/n1470.sh mute`) or every sounding channel is acknowledged (the panel's `ack` on that row);
+- writes one line to `logs/hv_alarms.log` when alarms start, change or clear, when a unit's HV goes on or off, and when the IOC stops or comes back (`tail -f logs/hv_alarms.log`);
+- mails `NOTIFY_EMAIL` (`db/testbench.conf`) when alarms start, change or clear;
+- fills the panel's alarm banner and log.
 
-| On an alarm | Where it shows |
-| --- | --- |
-| Red ALARM banner naming unit, channel and fault | The `watch` terminal |
-| Desktop notification (stays until dismissed, repeats every 60 s) | Lab PC's own screen |
-| Warning pop-up window | Every running VNC desktop (`:2`, `:3`) |
-| Alarm sound, again and again until it is muted (panel "mute alarm sound", `bin/n1470.sh mute`) or every sounding channel is acknowledged (the panel's `ack` on that row); no speech | Room speaker, and your remote desktop if the audio tunnel is up |
-| Red / orange row, alarm banner, alarm log | The bench panel (`phoebus/bench_panel.sh`) |
+To look at the values in a terminal: `watch -n 5 bin/n1470.sh -u all check`.
 
-- **Alarms:** OVC, OVV, UNV, MAXV, TRIP, OVP, OVT, ILK on any channel, the board alarm or interlock, and no readback while the HV is in use (MAJOR); VMON more than 10 V from VSET once the channel has been on without ramping for 30 s (MAJOR); IMON above 90 % of ISET, above the channel's limit (360 uA unless `hv.conf` says otherwise), or more than 10 % above VMON / R where `hv.conf` gives R (MINOR, still sounds). `KILL` and `DIS` on a channel the detector uses show as a NOTE.
-- **Silence the sound:** the panel's "mute alarm sound" button, or `bin/n1470.sh mute` (all alarms; it ends when the alarms clear, or `bin/n1470.sh unmute`); or `ack` on one row (that channel only, until its alarm clears; other channels still sound).
-- **Test a channel's alarm:** the panel's `test` on that row (unlocked): a MAJOR test alarm for 30 s through the whole chain (banner, log, sound, pop-ups). `bin/n1470.sh test-alarm` still tests the outputs without the HV.
-- **Only the detector's channels can be switched on:** a channel needs a row with unit and channel in the active detector's `hv.conf` (`testbench.sh use detector`); `n1470.sh on`, the panel's ON / "ON selected" and the IOC refuse all others (OFF always works). To use another channel, add its row to `hv.conf` (the IOC picks it up within 30 s). To keep a channel off in hardware, set its front-panel switch to OFF (status DIS) or KILL: the supply then refuses ON whatever the software does; HV_EN to use it again.
-- **Switch several channels at once:** tick their `sel` boxes in the panel, then "ON selected" (unlocked and HV box-safe armed) or "OFF selected"; "clear" un-ticks all. The ticks are shared by every window.
-- **Pick the alarm sound:** the "sound" drop-down above the panel's HV alarm log (locked too): a pick plays once and is kept (`state/alarm_sound`, also over IOC and annunciator restarts); `test` plays it again, muted or not. The 16 choices are `bin/alarm_sounds.list` (label and file; edit it, then restart `ioc-n1470` for the drop-down's labels).
-- **Spoken alarm:** off (`ALARM_SPEAK=` empty in `bin/n1470.sh`). With `ALARM_SPEAK=1`, `espeak-ng` says what is wrong after the sound (unit, channel or electrode, fault); voice and speed are `ALARM_VOICE` / `ALARM_SPEED`.
-- **Test the alarms:** `bin/n1470.sh test-alarm` fires every output once (warn the room first; `--quiet` skips the sound) and reports which outputs worked. It affects only that one command: no HV access, and a running `watch` monitor is untouched.
-- **Is the annunciator running?** `systemctl --user status hv-annunciator`; the panel's "annunciator" lamp is green and its banner grey when it is down. Any number of `watch` windows is fine: they only show.
-- **Units switched off or unplugged** while their HV is off are not an alarm (one log line). A unit that disappears, or can't be read, while its HV is on IS an alarm; a port held by GECO2020 only becomes one after 5 min (`BUSY_GRACE`).
-- **Logs** (in `logs/`; until the switch-over in the README, the timer still runs `~/hpDIRC/n1470.sh` and logs to `~/hpDIRC/logs/`): `hv_alarms.log` gets one line per alarm start/change/clear, HV on/off, and unit present/absent/busy; `hv_history_YYYYMMDD.csv` gets every channel once a minute, only while the HV is in use (any channel on, ramping, or VMON > 10 V). Idle days write nothing. Read with `tail -f logs/hv_alarms.log`.
-- **Pause / resume the alarms:** `systemctl --user stop hv-annunciator` / `start`. Without the IOCs (e.g. both stopped for GECO2020), the old timer still works: `systemctl --user enable --now n1470-check.timer`.
-- **Settings** (default sound file when none is picked, remote audio address, pop-ups, repeat time, `HV_ON_VMON`, `BUSY_GRACE`, `HISTORY_EVERY`) are at the top of `bin/n1470.sh`.
-
-### Alarm sound on your remote desktop (audio tunnel)
-
-VNC carries no sound; the alarm sound rides on the `ssh <lab-pc>` connection instead. One-off setup on the Ubuntu or Alma 9 desktop:
-
-1. Let PipeWire accept sound on a local port (persists across logins):
-
-```bash
-mkdir -p ~/.config/pipewire/pipewire-pulse.conf.d
-printf 'pulse.properties = {\n    server.address = [ "unix:native" "tcp:127.0.0.1:4713" ]\n}\n' > ~/.config/pipewire/pipewire-pulse.conf.d/tcp.conf
-systemctl --user restart pipewire-pulse
-```
-
-2. In `~/.ssh/config`, the block for the lab PC needs a **RemoteForward** (not LocalForward) for the audio:
-
-```
-Host  <lab-pc>
-  HostName <lab-pc-address>
-  User <lab-account>
-  ProxyJump <jump-host>          # if the lab PC is only reachable through one
-  LocalForward 5902 localhost:5902
-  LocalForward 5903 localhost:5903
-  RemoteForward 24713 127.0.0.1:4713
-```
-
-3. Connect with `ssh <lab-pc>` and keep it open: the remote sound works for as long as that connection is up, with or without the VNC viewer.
-
-Checks:
-
-- On the desktop: `ss -ltn | grep 4713` should show `127.0.0.1:4713`.
-- On the lab PC: `ss -ltn | grep 24713` should show `127.0.0.1:24713`.
-- Test from the lab PC (alarm sound + spoken test message on your desktop only, nothing in the room):
-
-```bash
-bin/n1470.sh test-alarm --remote-only
-```
-
-If the tunnel is down, the alarm just skips that output; the room speaker and pop-ups still work. A second `ssh <lab-pc>` prints `remote port forwarding failed for listen port 24713`: harmless, the first connection still carries the audio.
+- **Alarms:** OVC, OVV, UNV, MAXV, TRIP, OVP, OVT, ILK on any channel, the board alarm or interlock, and no readback while the HV is in use (MAJOR); VMON more than 10 V from VSET once the channel has been on without ramping for 30 s (MAJOR); IMON above 90 % of ISET, above the channel's limit (360 uA unless `hv.conf` says otherwise), or more than 10 % above VMON / R where `hv.conf` gives R (MINOR, still sounds); the laser's LD temperature bad or TEC off. `KILL` and `DIS` on a channel the detector uses show as a NOTE. The IOC itself not answering is an alarm while the HV was on.
+- **Test a channel's alarm:** the panel's `test` on that row (unlocked): a MAJOR test alarm for 30 s through the whole chain (banner, log, sound, mail).
+- **Only the detector's channels can be switched on:** a channel needs a row with unit and channel in the active detector's `hv.conf` (`testbench.sh use detector`); `n1470.sh on`, the panel's ON / "ON selected" and the IOC refuse all others (OFF always works). To use another channel, add its row to `hv.conf` (the IOC picks it up within 30 s). To keep a channel off in hardware, set its front-panel switch to OFF (status DIS) or KILL.
+- **Switch several channels at once:** tick their `sel` boxes in the panel, then "ON selected" (unlocked and HV box-safe armed) or "OFF selected"; "clear" un-ticks all.
+- **Pick the alarm sound:** the "sound" drop-down above the panel's HV alarm log (locked too): a pick plays once and is kept (`state/alarm_sound`); `test` plays it again. The 16 choices are `bin/alarm_sounds.list` (edit it, then restart `ioc-n1470` for the drop-down's labels).
+- **Is the annunciator running?** `systemctl --user status hv-annunciator`; the panel's "annunciator" lamp is green, and its banner grey when it is down. Pause / resume: `systemctl --user stop hv-annunciator` / `start`.
+- The HV history between runs is off: each run records the HV at its start (packets 940/941), and trips are in `hv_alarms.log`.
 
 ## XY stage (Thorlabs APT through EPICS, `motor.sh`)
 
@@ -244,17 +192,23 @@ The raw EPICS PVs (`caget` to read, `caput` to write):
 - **Backlash:** every position is approached from below. A move to a smaller value overshoots by 0.5 mm and comes back up.
 - **A raw `caput` of the value `move_abs` already holds does nothing** (the PV doesn't change, so `thor_epics` doesn't see it). `motor.sh` works around this; with plain `caput`, move somewhere else first.
 
-## XY scans (`scan_xy.sh`)
+## XY scans (`scans/scan_xy.sh`)
 
-One rcdaq run per point: the stage moves, the scan point is recorded (packets 910/911 and a CSV log), then N events or T seconds are taken.
+One rcdaq run per point: the stage moves, the scan point is recorded (packets 910/911 and a CSV log), then N events or T seconds are taken. The scans live in `scans/`; `scans/README.md` is the quick start.
 
 ```bash
-bin/scan_xy.sh -x 60:80:2 -y 70:90:2 -n 10000 --name tile66_map --dry-run
+scans/scan_xy.sh --pad 5,6 --step 0.4 -n 20000 --dry-run      # one pad (row, column as on the laser face)
+scans/scan_xy.sh --channel 20 --step 0.4 -n 20000 --dry-run   # the pad V1742 input 20 reads
+scans/scan_xy.sh --detector -n 2000 --dry-run                 # every pad centre
+scans/scan_xy.sh -x 60:80:2 -y 70:90:2 -n 10000 --dry-run     # stage mm
 ```
 
 | Option | Meaning |
 | --- | --- |
-| `-x`, `-y` | A value, or `START:STOP:STEP` in mm |
+| `--pad R,C` / `--channel N` | One pad, by row and column or by the V1742 input that reads it |
+| `--rows A-B`, `--cols A-B` / `--detector` | A block of pads / every pad |
+| `--step S` | With the pad options: a grid of S mm over the pads (default: one point per pad centre) |
+| `-x`, `-y` | Instead: a value, or `START:STOP:STEP` in stage mm |
 | `--points FILE` | Instead of a grid: `x y` per line |
 | `-n EVENTS` / `-t SECONDS` | How much data per point |
 | `-r TYPE` | rcdaq run type (default: the detector's) |
@@ -266,7 +220,7 @@ bin/scan_xy.sh -x 60:80:2 -y 70:90:2 -n 10000 --name tile66_map --dry-run
 | `--dry-run` | Print and check the plan; nothing moves |
 
 - **Before it starts** it checks: rcdaq running and idle, the run type exists, the V1742 is in the readlist, the motors answer, no CAEN HV alarm (`--skip-hv-check` to override), and that every electrode in the detector's `hv.conf` is on and at its VSET and the PiLas emission is on (`--dark` to scan without). Then it asks (`--yes` skips the question).
-- **Stop after the current point:** `bin/scan_xy.sh --quit`. The stage then goes to the rest position.
+- **Stop after the current point:** `scans/scan_xy.sh --quit`. The stage then goes to the rest position.
 - **Ctrl-C** ends the current run at once, stops the motors and leaves the stage where it is.
 - **Laser:** however the scan ends (finished, `--quit`, Ctrl-C), the PiLas is switched off unless `--keep-laser` is given. The HV is never touched.
 - **Log:** one folder per scan, `logs/scans/<date>_<time>_<name>/`. In it, `<date>_<time>_<name>.csv` has one line per point (target and read-back position, run number, events, times) and the `.txt` the parameters and the exact command. The scan's analysis output (maps, plots) goes in the same folder.
@@ -302,12 +256,11 @@ Before biasing a device:
 
 ## PiLas 405 nm laser (`pilas.sh`)
 
-Picosecond pulsed laser; not used for the QE measurement. Every `set` prints the readback afterwards.
+Picosecond pulsed laser; not used for the QE measurement. Everything goes through the PiLas IOC (`ioc-pilas`); with it stopped (for the PiLas GUI) the script does nothing. Every `set` prints the readback afterwards.
 
 | Command | What it does |
 | --- | --- |
 | `bin/pilas.sh status` | Serials, wavelength, emission, trigger, tune, frequency, head temperature, TEC |
-| `bin/pilas.sh query 'lht?'` | Any raw query (`help?` lists them all) |
 | `bin/pilas.sh set f 1030` | Internal frequency \[Hz\], 25 … 125000000 |
 | `bin/pilas.sh set ts 0` | Trigger source: 0 internal, 1 ext. adjustable, 2 ext. TTL |
 | `bin/pilas.sh set te 1` | Trigger edge: 0 falling, 1 rising |
@@ -316,7 +269,7 @@ Picosecond pulsed laser; not used for the QE measurement. Every `set` prints the
 | `bin/pilas.sh set tune 50` | Tune \[%\], 0 … 100; only accepted in manual tune mode |
 | `bin/pilas.sh off` | Pulsed emission off |
 | `bin/pilas.sh on --box-safe` | Pulsed emission on |
-| `bin/pilas.sh store` / `save 2` / `load 2` | Store as boot default / save to / load from memory 1–3 |
+| `bin/pilas.sh store` / `save 2` / `load 2 --box-safe` | Store as boot default / save to / load from memory 1–3 (load needs the flag: a memory might hold emission on) |
 
 The tune scale is confirmed on hardware: `set tune 45` reads back 45.00 % (22 Oct).
 

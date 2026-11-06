@@ -1,8 +1,9 @@
 #! /bin/bash
 #
 # Begin-run readback of the test-bench database: what was selected for this run.
-#   910 (text)    repository version, the active detector's detector.conf, hv.conf and
-#                 cabling.txt, the DAQ profile, and the scan point if scan_xy.sh is running
+#   910 (text)    all repository version, the active detector's detector.conf, hv.conf and
+#                 cabling.txt, the DAQ profile, and the scan point if scan_xy.sh or scan_hv.sh is
+#                 running (scan id and name, point, target, and the scan's whole command line)
 #   911 (numbers) one integer per line, in this order (format version 1):
 #                   0 format version (1)
 #                   1 DAQ FREQ_CODE (0 = 5 GS/s, 1 = 2.5, 2 = 1; -1 = not a V1742 profile)
@@ -13,7 +14,7 @@
 #                   6 number of points in the scan (0 = not part of a scan)
 #                   7 scan target X [um]
 #                   8 scan target Y [um]
-# The real stage position is in 931/932 (get_motor_xy_info.sh).
+# The real stage position is in 931 (get_motor_xy_info.sh).
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 tb_site

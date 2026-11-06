@@ -4,10 +4,29 @@ Each folder is a pmonitor project (started with `writePmonProject.sh <name>`), b
 and started with `./<name>.sh [file.evt]`. They all use the same event preparation and helpers
 from `../lib/`, so a channel is measured the same way in every study.
 
+## A new study
+To start a new project, make a directory and call `writePmonProject.sh <name>` there.
+```bash
+mkdir analysis/mystudy && cd analysis/mystudy && writePmonProject.sh mystudy
+```
+
+Then, in `mystudy.Makefile`, replace the `CXXFLAGS = ...` line as in the other projects:
+
+```make
+TB_ROOT_DIR = $(abspath ../..)
+CXXFLAGS = -I. -I$(TB_ROOT_DIR)/lib -DTB_ROOT_DIR=\"$(TB_ROOT_DIR)\" $(ROOTFLAGS) -I$(ONLINE_MAIN)/include -I$(OFFLINE_MAIN)/include
+```
+
+and start `process_event` from the pattern in `../lib/tb_v1742.h`.
+
+alteratively, run `analysis/new_pmonitor_project.sh analysis/<name>` which has our specific changes already baked in.
+
+## Current scripts
+
 | Project | What it gives | Typical use |
 | --- | --- | --- |
 | `general/` | Per channel: amplitude, charge, CFD time, late pulses, occupancy (per channel and per pixel), SPE gain fit; `suggest_windows()` finds the signal window | First look at any run; choose the windows for the others |
-| `gain_hv/` | SPE gain and mean photoelectrons per run and channel, gain vs HV (exponential fit), working point for a target gain | An HV series at low light (mu ~ 0.1-1); `bin/scan_hv.sh` takes one; `fit_hv_scan.sh <scan folder>` fits and plots it. An xy scan with ~20000 events per point: `fit_gain_map.sh <scan folder>` maps the gain (parallel jobs) |
+| `gain_hv/` | SPE gain and mean photoelectrons per run and channel, gain vs HV (exponential fit), working point for a target gain | An HV series at low light (mu ~ 0.1-1); `scans/scan_hv.sh` takes one; `fit_hv_scan.sh <scan folder>` fits and plots it. An xy scan with ~20000 events per point: `fit_gain_map.sh <scan folder>` maps the gain (parallel jobs) |
 | `timing_xtalk/` | CFD core sigma and late-tail fraction; leading-edge time-walk fit and corrected sigma; crosstalk: average induced pulse in every channel around clean single-channel pulses, source x receiver matrix | Any laser run; crosstalk needs light mostly in one pixel |
 | `scan_map/` | From an XY scan: occupancy maps per channel, best-channel map, channel centroids, fit of the stage position of pixel (0,0), pitch, mirror / row-column swap, and channels that are not where the map says | Checking a detector's mapping and position after a `scan_xy.sh` scan |
 | `clusters/` | Two stages: one pass saves every channel's pulse height, charge and time per event (plus some waveforms); then clusters with any cuts in seconds: sizes, centroids, charge sharing, 2-pixel pairs against chance, neighbour-threshold scan (diagonals as the control), example waveforms, distance/time of other pixels' pulses; with a fixed charge window, the single-photoelectron fit of the spot pixels' summed charge (shared photoelectrons counted whole) | Charge sharing and cluster cuts; SPE charge and gain with the laser on a pixel edge or corner |
@@ -20,7 +39,7 @@ from `../lib/`, so a channel is measured the same way in every study.
 
 | File | Contents |
 | --- | --- |
-| `tb_v1742.h` | `V1742Event`: DRS4 calibration (picked from the data), baseline, despike, group trigger times (line fit over the TR edge). `TimeOffsets`: the inputs' time offsets from `db/v1742/` (same serial/speed lookup as the calibration). `RunInfo`: begin-run packets (detector 910, scan point 911, serial 921, stage 932/931, HV 941). `measure()`: amplitude, charge, CFD and leading-edge time of one channel with `Cuts`. |
+| `tb_v1742.h` | `V1742Event`: DRS4 calibration (picked from the data), baseline, despike, group trigger times (line fit over the TR edge). `TimeOffsets`: the inputs' time offsets from `db/v1742/` (same serial/speed lookup as the calibration). `RunInfo`: begin-run packets (detector 910, scan point 911, serial 921, stage 931 (older runs 932 / hpDIRC 931), HV 941). `measure()`: amplitude, charge, CFD and leading-edge time of one channel with `Cuts`. |
 | `tb_pulse.h` | Waveform helpers: median, rms, CFD, edge-fit time, crossing time, charge, pulse finding, despike. No ROOT. |
 | `tb_spe.h` | Single-photoelectron fit (pedestal + Poisson x Gauss), gain = Q1 / e, `resolved` = Q1 > 3 pedestal sigmas. |
 | `tb_fit.h` | Timing core sigma (Gaussian over +-2 sigma) and tail fraction. |
@@ -40,17 +59,4 @@ from `../lib/`, so a channel is measured the same way in every study.
 - **Pixels** need the detector's `mapping.txt` and `cabling.txt` in the db; without the
   cabling, results are per channel only.
 
-## A new study
 
-```bash
-mkdir analysis/mystudy && cd analysis/mystudy && writePmonProject.sh mystudy
-```
-
-Then, in `mystudy.Makefile`, replace the `CXXFLAGS = ...` line as in the other projects:
-
-```make
-TB_ROOT_DIR = $(abspath ../..)
-CXXFLAGS = -I. -I$(TB_ROOT_DIR)/lib -DTB_ROOT_DIR=\"$(TB_ROOT_DIR)\" $(ROOTFLAGS) -I$(ONLINE_MAIN)/include -I$(OFFLINE_MAIN)/include
-```
-
-and start `process_event` from the pattern in `../lib/tb_v1742.h`.

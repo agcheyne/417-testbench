@@ -7,7 +7,7 @@ mkdir -p "$ANC_PACKETS"
 
 BIN=$TB_ROOT/bin
 
-# PiLas laser readback (read-only). Fails harmlessly if the PiLas GUI has the port open.
+# PiLas laser readback (read-only), through its IOC. Fails harmlessly (FAILED) if the IOC is stopped.
 > $ANC_PACKETS/laserinfo.txt
 > $ANC_PACKETS/laserinfo_numeric.txt
 date >> $ANC_PACKETS/laserinfo.txt
@@ -16,7 +16,7 @@ if ! timeout 20 "$BIN/pilas.sh" status >> $ANC_PACKETS/laserinfo.txt 2>&1 ; then
     exit 0
 fi
 
-# numeric packet (integers only), one value per line:
+# numeric packet (integers only so decimals need conversion, e.g. 50.00% -> 5000), one value per line:
 #   controller serial (trailing digits), wavelength [nm], pulsed emission (1 on), CW emission (1 on),
 #   interlock (1 enabled), trigger source (0 int, 1 ext. adj., 2 ext. TTL), trigger edge (1 rising),
 #   trigger level [mV], tune mode (1 auto), tune value [0.01 %], int. frequency [Hz],

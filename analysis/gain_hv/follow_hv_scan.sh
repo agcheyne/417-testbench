@@ -1,6 +1,6 @@
 #! /bin/bash
 #
-# Fit an HV scan (bin/scan_hv.sh) while it is being taken, for the live gain curve
+# Fit an HV scan (scans/scan_hv.sh) while it is being taken, for the live gain curve
 # (live_hv_curve.C): each point's run, as soon as scan_hv.sh has written its CSV line, gets the
 # single-photoelectron fits of fit_gain_map.C (every channel, and the spot holding --contain of
 # the mean charge) in a fixed window. Once the scan has ended ("# ended" in <scan>.txt, or
@@ -16,15 +16,17 @@
 #   --events N         events read per run (default 20000)
 #   --jobs N           runs fitted at once (default 2)
 #   --no-final         skip fit_hv_scan.sh at the end
+#   --keep-parts       keep <scan>_live_parts/ after the final fit (removed by default: the final
+#                      fit's <scan>_fits.csv/.root hold the results)
 #
 # Writes <scan>_live_parts/run<N>.csv / .root / _spots.csv / .log (what live_hv_curve.C reads).
 . "$(dirname "$(readlink -f "$0")")/../../lib/tb.sh"
 HERE=$(dirname "$(readlink -f "$0")")
 tb_site
 
-usage() { sed -n '3,21p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,22p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
-SCAN= WINDOW=24.1:27.3 CONTAIN=0.95 EVENTS=20000 JOBS=2 FINAL=1
+SCAN= WINDOW=24.1:27.3 CONTAIN=0.95 EVENTS=20000 JOBS=2 FINAL=1 KEEP_PARTS=
 while [ $# -gt 0 ] ; do
     case $1 in
         --window) WINDOW=$2 ; shift ;;
@@ -32,6 +34,7 @@ while [ $# -gt 0 ] ; do
         --events) EVENTS=$2 ; shift ;;
         --jobs) JOBS=$2 ; shift ;;
         --no-final) FINAL= ;;
+        --keep-parts) KEEP_PARTS=1 ;;
         -h|--help) usage ;;
         -*) tb_die "unknown option $1 (follow_hv_scan.sh -h)" ;;
         *) [ -z "$SCAN" ] || tb_die "one scan at a time" ; SCAN=$1 ;;
@@ -49,7 +52,7 @@ fi
 DIR=$(readlink -f "$DIR")
 NAME=$(basename "$DIR")
 CSV=$DIR/$NAME.csv
-head -1 "$CSV" 2> /dev/null | grep -q '^point,target_V,.*,run,' || tb_die "no $CSV from an HV scan (bin/scan_hv.sh)"
+head -1 "$CSV" 2> /dev/null | grep -q '^point,target_V,.*,run,' || tb_die "no $CSV from an HV scan (scans/scan_hv.sh)"
 RUNTYPE=$(sed -n 's/^# detector .*, run type \([^ ,]*\).*/\1/p' "$DIR/$NAME.txt")
 SCAN_ID=$(sed -n 's/^# HV scan .*, id \([0-9]*\),.*/\1/p' "$DIR/$NAME.txt")
 [ -n "$RUNTYPE" ] && [ -n "$SCAN_ID" ] || tb_die "no run type or scan id in $DIR/$NAME.txt"
@@ -90,4 +93,7 @@ if [ -n "$stopped" ] ; then
     echo "stopped" ; exit 1
 fi
 echo "$(date +%T) all runs fitted"
-[ -n "$FINAL" ] && "$HERE/fit_hv_scan.sh" "$DIR" --events $EVENTS && echo "$(date +%T) final fit done"
+[ -n "$FINAL" ] || exit 0
+"$HERE/fit_hv_scan.sh" "$DIR" --events $EVENTS || exit
+echo "$(date +%T) final fit done"
+[ -n "$KEEP_PARTS" ] || { rm -rf "$PARTS" ; echo "  $PARTS removed (--keep-parts keeps it)" ; }
