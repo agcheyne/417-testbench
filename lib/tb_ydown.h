@@ -1,11 +1,15 @@
-// tb_ydown.h - x-y maps drawn as the bench face: stage x to the right, stage y DOWN, (0,0) at the top left (ROOT).
+// tb_ydown.h - 
+
+// helper for x-y maps drawn as the bench face: (0,0) at the top left (ROOT).
 //
 // ROOT has no reversed axis, so a map is drawn as a copy at -y with its y labels changed back to +y;
 // anything drawn over it (boxes, markers, lines, text) goes at tb::y_down(y). The histogram itself keeps
 // the stage y (fits, FindBin, files):
 //   TH2D *hd = tb::draw_y_down(h, "colz");      // the copy drawn
 //   marker->DrawMarker(x, tb::y_down(y));
+
 // A histogram built at -y by the caller just needs tb::y_down_axis(h) after its Draw.
+
 #ifndef TB_YDOWN_H
 #define TB_YDOWN_H
 

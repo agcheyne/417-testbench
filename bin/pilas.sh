@@ -16,15 +16,13 @@
 #   pilas.sh save N | load N --box-safe
 #                                 save to / load from memory N = 1, 2, 3 (load needs the flag: a stored
 #                                 memory might hold emission on)
-#
-# The IOC owns the serial port; with it stopped (e.g. for the PiLas GUI) nothing here works. The IOC
-# refuses emission on and load unless PILAS:BOX_SAFE is armed, which --box-safe does just before.
+
 
 FAST_MAX=6      # s: PILAS:LD is read every 2 s, the rest every 10 s; older than three reads = stale
 SLOW_MAX=30
 
 die() { echo "pilas: $*" >&2 ; exit 1 ; }
-usage() { sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,18p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 

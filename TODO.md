@@ -1,16 +1,12 @@
 # TODO
 
-- [ ] Bad V1742 inputs, the same in all four maps (27, 29, 30 Oct, 2 Nov: different pads each time, so bench side). 6 Nov: cables left in the adapter (join position) for the technicians, purple bundle = inputs 0-15, yellow = 16-31, each labelled 1-16 (purple k = input k-1, yellow k = input 15+k; GSI's own labels differ). If the cables test fine: pulser straight into the V1742 inputs
+- [ ] Photonis cables, asked technicians to check but if the cables test fine: pulser straight into the V1742 inputs
   - Dead: 8, 10, 18, 25, 28 (purple 9, 11; yellow 3, 10, 13)
   - Noise/pickup: 4, 6 every map (purple 5, 7); 0, 2 dead 27-29 Oct, noisy since (purple 1, 3). 2 Nov waveforms: slow ±5-10 mV baseline wander, rms 0.6-1.4 mV (good 0.34); 0 and 4 still show laser pulses, 2 and 6 hardly any
-- [ ] Next maps: ND 4.7 or 5.0, 10k events/point (pick one)
-- [ ] Light test at core, 2100 V: ND 5.0 vs 4.5, 200k events (under-amplified p.e. term)
+- [ ] Test lower light level fits to decrease N-events needed. maybe 15% is okay.
 - [ ] New student HV scan at 1 kHz (no board misalignment), clean pad; set in /scratch2/data/hpDIRC/students/
-- [ ] Hit-time study (analysis/time_xy) on the other detectors: HRPPD, Photek
-- [ ] HRPPD #26 first light (4 Nov): cable HV as db/detectors/HRPPD_26/hv.conf (A0-3 MCP electrodes, B0 PC), fill V1742 slot (cabling.txt) + STAGE_X0/Y0_MM
-- [ ] Group HV off (IOC n1470_group.db): test a real trip once on a dummy load before trusting it
-- [ ] Pearson chi2/ndf column in gain fit tables
-- [ ] Photek remount: hv.conf unit/ch/vset, octant in cabling.txt, new STAGE_X0/Y0_MM
+- [ ] HRPPD #26 first light [delayed] - HV pin needs repaired. After than, build offset/cable db.
+- [ ] Photek remounted: db config needs updated; hv.conf unit/ch/vset, octant in cabling.txt, new STAGE_X0/Y0_MM
 - [ ] fit_hv_scan.sh auto window picks 61 ns pickup on readout 1 (use `--window 24.1:27.3` until fixed)
 - [ ] Readout-1 column 0 (ch14-17) dark 3-6x, big single-pad pulses (17-21 mV vs SPE 7.5), lowest gain: lights/cloth test, readout-0 dark run, rate vs HV
 - [ ] Analysis output to /scratch2 only if the /home file quota still bites (the fits' parts folders are removed after each fit since 6 Nov)
@@ -19,6 +15,8 @@
 - [ ] 2-board analysis sync check: flag events where TTT0-TTT1 jumps by ~a period from the previous event (not a fixed half-period cut: 0.7 ppm drift reaches 0.5 ms after ~11 min)
 - [ ] Old hpDIRC/rcdaq_scripts libs (glasgow, sigma_hits) built against the pre-5-Nov libEvent: rebuild before use (Packet vtable changed)
 - [ ] Rework the student kit
+- [ ] Label the physical HV units (A/B) to match db.
+- [ ] Streamline analysis macros
 
 ## EPICS (open since the IOCs went in, 1 Nov; docs/epics.md)
 

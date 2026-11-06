@@ -20,9 +20,8 @@
 #   monochromator.sh raw CMD [CMD ..]  send ISA commands as they are and print each reply; \r = CR,
 #                                      \x00 = NUL, e.g. raw ' ' E 'H0\r'. No limits are checked
 #
-# Limits, overshoot, dark position, speed and timeout: MONO_MIN / MONO_MAX / MONO_BACKLASH /
-# MONO_DARK / MONO_SPEED / MONO_MOVE_TIMEOUT in db/testbench.conf. Moves are refused while the
-# position reads 0 (not set since power-on).
+# Limits, overshoot, dark position, speed and timeout: in db/testbench.conf. 
+# Moves are refused while the position reads 0 (not set since power-on).
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
 tb_site

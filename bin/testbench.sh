@@ -48,7 +48,7 @@ cmd_list() {
         tb_conf "$(tb_detector_dir $n)/detector.conf"
         printf '  %1s %-20s %-8s %s\n' "$([ "$n" == "$DETECTOR" ] && echo '*')" "$n" "$RUNTYPE" "$DESCRIPTION"
     done
-    echo "DAQ profiles (db/daq):"
+    echo "profiles (db/daq):"
     for n in $(tb_daq_names) ; do
         local DESCRIPTION=
         tb_conf "$(tb_daq_file $n)"

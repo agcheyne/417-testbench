@@ -10,14 +10,13 @@
 #   motor.sh stop                      stop both axes
 #   motor.sh home x|y|both --yes       drive to the home switch (position 0)
 #
-# Limits, tolerance and timeout are X_MIN.. / MOVE_TOL / MOVE_TIMEOUT in db/testbench.conf.
-# Targets are rounded to 0.01 mm (what thor_epics passes on). thor_epics approaches every
-# position from below: a move to a smaller value overshoots by 0.5 mm and comes back.
+# Limits, tolerance and timeout are in db/testbench.conf.
+# Targets are rounded to 0.01 mm
 
 . "$(dirname "$(readlink -f "$0")")/../lib/tb.sh"
-tb_site
+tb_site # loads the XY stage config from db/testbench.conf
 
-usage() { sed -n '3,16p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
+usage() { sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//' ; exit 2 ; }
 
 MOVING_BITS=$((0x10 | 0x20 | 0x40 | 0x80 | 0x200))   # moving fwd/rev, jogging fwd/rev, homing
 LIMIT_BITS=$((0x1 | 0x2))                             # hardware limit switch fwd/rev
